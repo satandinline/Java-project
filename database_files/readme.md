@@ -1,0 +1,149 @@
+## 说明
+
+2025/10/21：
+1. 运行init_schema.sql脚本，可以在本地创建相关的表；
+2. 所附上的erdiagram.png为文化资源表、文化实体表、关系表、用户表的粗略E-R图，以供参考
+
+
+## 表的字段解释
+
+### 1. 文化资源表 (cultural_resources)
+
+**用途：** 存储爬虫抓取或用户上传的原始文化素材。
+
+| 字段名 (Field Name) | 推荐类型 | 描述 | 作用 |
+| :--- | :--- | :--- | :--- |
+| `id` | `BIGINT` (PK) | 唯一主键 | |
+| `title` | `VARCHAR(255)` | 标题 |"基础标识字段" |
+| `resource_type` | `VARCHAR(50)` | 资源类型（如：文本、图像） |"内容类型字段" |
+| `file_format` | `VARCHAR(20)` | 文件格式（如：TXT, JPG） |"内容类型字段" |
+| `source_from` | `VARCHAR(255)` | 数据来源（如：网站名称） |"来源信息字段" |
+| `source_url` | `TEXT` (Unique) | 原始URL链接 |"来源信息字段" |
+| `content_feature_data` | `LONGTEXT` / `JSON` | 存储文本内容或特征向量的引用 |"内容特征字段" |
+| `version` | `INT` | 版本号 |"版本管理字段" |
+| `created_at` | `TIMESTAMP` | 创建时间 |"基础标识字段" |
+| `updated_at` | `TIMESTAMP` | 最后更新时间 |"版本管理字段" |
+
+---
+
+### 2. 文化实体表 (cultural_entities)
+
+**用途：** 存储从资源中提取出的结构化实体信息。
+
+| 字段名 (Field Name) | 推荐类型 | 描述 | 作用 |
+| :--- | :--- | :--- | :--- |
+| `id` | `BIGINT` (PK) | 唯一主键 | |
+| `entity_name` | `VARCHAR(255)` |实体名称 |"核心属性" |
+| `entity_type` | `VARCHAR(50)` |实体类型（如：人物、作品、事件、地点） |"核心属性" |
+| `description` | `TEXT` |描述 |"核心属性" |
+| `source` | `TEXT` |来源 |"核心属性" |
+| `period_era` | `VARCHAR(100)` |时期年代 |"时空属性" |
+| `geo_coordinates` | `POINT` / `VARCHAR(100)`|地理坐标 |"时空属性" |
+| `cultural_region` | `VARCHAR(100)` |文化区域 |"时空属性" |
+| `style_features` | `TEXT` |风格特征 |"特征属性" |
+| `cultural_value` | `TEXT` |文化价值 |"特征属性" |
+| `related_images_url` | `TEXT` |相关图像链接 |"扩展属性" |
+| `digital_resource_link` | `TEXT` |数字资源链接 |"扩展属性" |
+
+---
+
+### 3. 关系表 (entity_relationships)
+
+**用途：** 存储实体与实体之间的关系，用于构建知识图谱。
+
+| 字段名 (Field Name) | 推荐类型 | 描述 | 作用 |
+| :--- | :--- | :--- | :--- |
+| `id` | `BIGINT` (PK) | 唯一主键 | |
+| `source_entity_id` | `BIGINT` (FK) | 源实体ID (关联 `cultural_entities.id`) | |
+| `target_entity_id` | `BIGINT` (FK) | 目标实体ID (关联 `cultural_entities.id`) | |
+| `relationship_type` | `VARCHAR(50)` |关系类型（如：创作、影响、时空、相似、组成） |"关系类型体系" |
+| `relationship_strength` | `FLOAT` |关系强度 |"关系属性设计" |
+| `relationship_evidence` | `TEXT` |关系证据（支撑关系的图像或来源） |"关系属性设计" |
+| `spatiotemporal_constraint` | `VARCHAR(255)` |时空约束 |"关系属性设计" |
+| `confidence_score` | `FLOAT` |置信度评分 |"关系属性设计" |
+
+---
+
+### 4. 用户表 (users)
+
+**用途：** 存储用户信息和权限。
+
+| 字段名 (Field Name) | 推荐类型 | 描述 | 作用 |
+| :--- | :--- | :--- | :--- |
+| `id` | `BIGINT` (PK) | 唯一主键 | |
+| `username` | `VARCHAR(100)` (Unique) | 用户名 | |
+| `password_hash` | `VARCHAR(255)` | 加密后的密码 | |
+| `role` | `ENUM('普通用户', '管理员')` |角色（普通用户或系统管理员） |"用户主要分为两类" |
+| `created_at` | `TIMESTAMP` | 注册时间 | |
+
+---
+
+### 5. 用户行为日志表 (user_behavior_logs)
+
+**用途：** 追踪用户的各类行为。 
+
+| 字段名 (Field Name) | 推荐类型 | 描述 | 作用 |
+| :--- | :--- | :--- | :--- |
+| `id` | `BIGINT` (PK) | 唯一主键 | |
+| `user_id` | `BIGINT` (FK) | 用户ID (关联 `users.id`) |"对用户的行为进行追踪" |
+| `behavior_type` | `ENUM('检索', '交互', '生成', '标注')` |行为类型（检索、交互、生成、标注） |"检索行为、交互行为、生成行为、标注行为" |
+| `content` | `TEXT` | 行为内容（如：搜索词、生成提示词） | |
+| `timestamp` | `TIMESTAMP` | 行为发生时间 | |
+
+---
+
+### 6. 问答会话表 (qa_sessions)
+
+**用途：** 存储会话信息，用于上下文管理。 
+
+| 字段名 (Field Name) | 推荐类型 | 描述 | 作用 |
+| :--- | :--- | :--- | :--- |
+| `id` | `BIGINT` (PK) | 唯一主键 | |
+| `user_id` | `BIGINT` (FK) | 用户ID (关联 `users.id`) | |
+| `created_at` | `TIMESTAMP` | 会话开始时间 | |
+| `summary` | `TEXT` | 会话摘要（用于上下文管理） |"对会话进行上下文管理" |
+
+---
+
+### 7. 问答消息表 (qa_messages)
+
+**用途：** 追踪多轮对话的具体内容并收集反馈。 
+
+| 字段名 (Field Name) | 推荐类型 | 描述 | 作用 |
+| :--- | :--- | :--- | :--- |
+| `id` | `BIGINT` (PK) | 唯一主键 | |
+| `session_id` | `BIGINT` (FK) | 会话ID (关联 `qa_sessions.id`) |"对多轮对话进行追踪" |
+| `sender` | `ENUM('user', 'ai')` | 发送方（用户或AI） | |
+| `message_content` | `TEXT` | 消息内容 | |
+| `user_feedback` | `TEXT` / `INT` |用户反馈（如：评分或评论） |"收集用户反馈" |
+| `timestamp` | `TIMESTAMP` | 消息发送时间 | |
+
+---
+
+### 8. 标注任务表 (annotation_tasks)
+
+**用途：** 管理标注任务。
+
+| 字段名 (Field Name) | 推荐类型 | 描述 | 作用 |
+| :--- | :--- | :--- | :--- |
+| `id` | `BIGINT` (PK) | 唯一主键 | |
+| `resource_id` | `BIGINT` (FK) | 关联的资源ID (关联 `cultural_resources.id`) | |
+| `task_type` | `ENUM('实体', '质量', '语义')` |任务体系（实体、质量、语义） |"标注任务分为几个体系" |
+| `status` | `VARCHAR(20)` | 任务状态（如：待标注, 待审核, 已完成） | |
+| `required_annotators` | `INT` | 需要的标注人数 |"多人标注机制"  |
+
+---
+
+### 9. 标注记录表 (annotation_records)
+
+**用途：** 存储每条具体的标注结果，支持多人标注和专家审核。 
+
+| 字段名 (Field Name) | 推荐类型 | 描述 | 作用 |
+| :--- | :--- | :--- | :--- |
+| `id` | `BIGINT` (PK) | 唯一主键 | |
+| `task_id` | `BIGINT` (FK) | 任务ID (关联 `annotation_tasks.id`) | |
+| `annotator_id` | `BIGINT` (FK) | 标注者ID (关联 `users.id`) |"多人标注机制" |
+| `annotation_data` | `JSON` / `TEXT` | 标注的具体内容 | |
+| `is_expert_reviewed` | `BOOLEAN` | 是否经过专家审核 |"引入专家审核流程" |
+| `reviewer_id` | `BIGINT` (FK) | 审核专家ID (关联 `users.id`) |"引入专家审核流程" |
+| `created_at` | `TIMESTAMP` | 标注提交时间 | |
