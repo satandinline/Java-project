@@ -154,3 +154,70 @@ CREATE TABLE IF NOT EXISTS `annotation_records` (
   INDEX `idx_task` (`task_id`),
   INDEX `idx_annotator` (`annotator_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='标注记录表';
+
+-- --------------------------------------------------
+-- 2025.11.10补充
+-- --------------------------------------------------
+
+-- --------------------------------------------------
+-- 10. 用户上传资源表 (cultural_resources_from_user)
+-- 用于存储用户上传、等待审核的内容
+-- --------------------------------------------------
+CREATE TABLE IF NOT EXISTS `cultural_resources_from_user` (
+  `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
+  `user_id` BIGINT NOT NULL COMMENT '上传用户ID',
+  `title` VARCHAR(255) COMMENT '标题',
+  `resource_type` VARCHAR(50) COMMENT '资源类型（如：文本、图像）',
+  `file_format` VARCHAR(20) COMMENT '文件格式（如：TXT, JPG）',
+  `content_feature_data` LONGTEXT COMMENT '存储文本内容或特征向量的引用',
+  `content_hash` VARCHAR(64) COMMENT '内容的SHA-256哈希，用于快速查重',
+  `ai_review_status` ENUM('pending', 'passed', 'failed') NOT NULL DEFAULT 'pending' COMMENT 'AI审核状态',
+  `manual_review_status` ENUM('pending', 'passed', 'failed') NOT NULL DEFAULT 'pending' COMMENT '人工审核状态',
+  `upload_time` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '上传时间',
+  `review_notes` TEXT COMMENT '审核备注（例如：未通过原因）',
+  FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+  UNIQUE KEY `uk_content_hash` (`content_hash`) COMMENT '哈希唯一索引，防止重复上传'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户上传资源待审表';
+
+-- --------------------------------------------------
+-- 11. AIGC文化资源表 (AIGC_cultural_resources)
+-- 专门存储由AIGC生成的文化资源，结构与主资源表一致
+-- --------------------------------------------------
+CREATE TABLE IF NOT EXISTS `AIGC_cultural_resources` (
+  `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
+  `title` VARCHAR(255) COMMENT '标题',
+  `resource_type` VARCHAR(50) COMMENT '资源类型（如：文本、图像）',
+  `file_format` VARCHAR(20) COMMENT '文件格式（如：TXT, JPG）',
+  `source_from` VARCHAR(255) COMMENT '数据来源（例如：AIGC模型名称）',
+  `source_url` TEXT COMMENT '原始URL链接 (如果适用)',
+  `content_feature_data` LONGTEXT COMMENT '存储文本内容或特征向量的引用',
+  `version` INT DEFAULT 1 COMMENT '版本号',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后更新时间'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AIGC生成的文化资源表';
+
+-- --------------------------------------------------
+-- 12. AIGC生成图像表 (AIGC_graph)
+-- 存储AIGC生成的图像的元数据
+-- --------------------------------------------------
+CREATE TABLE IF NOT EXISTS `AIGC_graph` (
+  `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
+  `file_name` VARCHAR(255) NOT NULL COMMENT '文件名',
+  `storage_path` VARCHAR(767) NOT NULL UNIQUE COMMENT '存储路径',
+  `dimensions` VARCHAR(50) COMMENT '尺寸 (例如: 1024x1024)',
+  `upload_time` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '上传时间',
+  `tags` JSON COMMENT '标签 (JSON数组格式, e.g., ["风景", "水墨画"])'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AIGC生成图像元数据表';
+
+-- --------------------------------------------------
+-- 13. 爬虫抓取图像表 (crawled_images)
+-- 存储爬虫抓取的图像元数据
+-- --------------------------------------------------
+CREATE TABLE IF NOT EXISTS `crawled_images` (
+  `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
+  `file_name` VARCHAR(255) NOT NULL COMMENT '文件名',
+  `storage_path` VARCHAR(767) NOT NULL UNIQUE COMMENT '存储路径',
+  `dimensions` VARCHAR(50) COMMENT '尺寸 (例如: 1024x1024)',
+  `crawl_time` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '抓取时间',
+  `tags` JSON COMMENT '标签 (使用JSON数组格式, e.g., ["京剧", "脸谱"])'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='爬虫抓取图像元数据表';

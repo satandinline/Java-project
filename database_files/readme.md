@@ -147,3 +147,71 @@
 | `is_expert_reviewed` | `BOOLEAN` | 是否经过专家审核 |"引入专家审核流程" |
 | `reviewer_id` | `BIGINT` (FK) | 审核专家ID (关联 `users.id`) |"引入专家审核流程" |
 | `created_at` | `TIMESTAMP` | 标注提交时间 | |
+
+
+### 10. 用户上传资源表 (cultural_resources_from_user)
+
+**用途：** 存储用户上传、等待审核的内容。
+
+| 字段名 (Field Name) | 推荐类型 | 描述 |
+| :--- | :--- | :--- |
+| `id` | `BIGINT` (PK) | 唯一主键 |
+| `user_id` | `BIGINT` (FK) | 上传用户ID (关联 `users.id`) |
+| `title` | `VARCHAR(255)` | 标题 |
+| `resource_type` | `VARCHAR(50)` | 资源类型（如：文本、图像） |
+| `file_format` | `VARCHAR(20)` | 文件格式（如：TXT, JPG） |
+| `content_feature_data` | `LONGTEXT` | 存储文本内容或特征向量的引用 |
+| `content_hash` | `VARCHAR(64)` | 内容的SHA-256哈希，用于快速查重 |
+| `ai_review_status` | `ENUM('pending', 'passed', 'failed')` | AI审核状态 |
+| `manual_review_status` | `ENUM('pending', 'passed', 'failed')` | 人工审核状态 |
+| `upload_time` | `TIMESTAMP` | 上传时间 |
+| `review_notes` | `TEXT` | 审核备注（例如：未通过原因） |
+
+---
+
+### 11. AIGC文化资源表 (AIGC_cultural_resources)
+
+**用途：** 专门存储由AIGC生成的文化资源，结构与主资源表一致。
+
+| 字段名 (Field Name) | 推荐类型 | 描述 |
+| :--- | :--- | :--- |
+| `id` | `BIGINT` (PK) | 唯一主键 |
+| `title` | `VARCHAR(255)` | 标题 |
+| `resource_type` | `VARCHAR(50)` | 资源类型（如：文本、图像） |
+| `file_format` | `VARCHAR(20)` | 文件格式（如：TXT, JPG） |
+| `source_from` | `VARCHAR(255)` | 数据来源（例如：AIGC模型名称） |
+| `source_url` | `TEXT` | 原始URL链接 (如果适用) |
+| `content_feature_data` | `LONGTEXT` | 存储文本内容或特征向量的引用 |
+| `version` | `INT` | 版本号 |
+| `created_at` | `TIMESTAMP` | 创建时间 |
+| `updated_at` | `TIMESTAMP` | 最后更新时间 |
+
+---
+
+### 12. AIGC生成图像表 (AIGC_graph)
+
+**用途：** 存储AIGC生成的图像的元数据。
+
+| 字段名 (Field Name) | 推荐类型 | 描述 |
+| :--- | :--- | :--- |
+| `id` | `BIGINT` (PK) | 唯一主键 |
+| `file_name` | `VARCHAR(255)` | 文件名 |
+| `storage_path` | `VARCHAR(767)` (Unique) | 存储路径 (已调整长度以兼容索引) |
+| `dimensions` | `VARCHAR(50)` | 尺寸 (例如: 1024x1024) |
+| `upload_time` | `TIMESTAMP` | 上传时间 |
+| `tags` | `JSON` | 标签 (JSON数组格式) |
+
+---
+
+### 13. 爬虫抓取图像表 (crawled_images)
+
+**用途：** 存储爬虫抓取的图像元数据。
+
+| 字段名 (Field Name) | 推荐类型 | 描述 |
+| :--- | :--- | :--- |
+| `id` | `BIGINT` (PK) | 唯一主键 |
+| `file_name` | `VARCHAR(255)` | 文件名 |
+| `storage_path` | `VARCHAR(767)` (Unique) | 存储路径 (已调整长度以兼容索引) |
+| `dimensions` | `VARCHAR(50)` | 尺寸 (例如: 1024x1024) |
+| `crawl_time` | `TIMESTAMP` | 抓取时间 |
+| `tags` | `JSON` | 标签 (JSON数组格式) |
