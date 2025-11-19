@@ -8,6 +8,19 @@
 -- 设置字符集
 SET NAMES utf8mb4;
 
+
+-- 创建管理员角色并赋予所有权限
+create role 'manager'@'%';
+grant all privileges on *.* to 'manager'@'%' with grant option
+
+-- 创建普通用户角色并赋予查询、
+create role 'users'@'%'
+grant select,insert,update,delete on users to 'users'@'%'
+grant select,insert on cultural_resources to 'users'@'%'
+grant select,insert on cultural_entities to 'users'@'%'
+grant select,insert,delete on qa_sessions to 'users'@'%'
+grant select,insert,delete on cultural_resources_from_user to 'users'@'%'
+   
 -- --------------------------------------------------
 -- 1. 用户表 (users)
 -- 存储用户信息和权限 
