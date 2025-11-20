@@ -1,0 +1,3 @@
+scrapy>=2.10
+PyMySQL>=1.1.0
+w3lib>=2.1.2
