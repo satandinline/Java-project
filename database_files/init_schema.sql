@@ -5,6 +5,10 @@
 -- 数据库类型: MySQL
 -- --------------------------------------------------
 
+-- 创建数据库java_project，并切换到该数据库 
+CREATE DATABASE IF NOT EXISTS java_project CHARACTER SET utf8mb4;
+USE java_project;
+
 -- 设置字符集
 SET NAMES utf8mb4;
 
