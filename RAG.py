@@ -1,4 +1,5 @@
 import concurrent.futures
+
 import hashlib
 import logging
 import os
@@ -14,13 +15,16 @@ from langchain_core.prompts import PromptTemplate
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from sqlalchemy import create_engine
 from tqdm import tqdm
-from langchain_dashscope import ChatDashScope
+#from langchain_dashscope import ChatDashScope
 from langchain_community.vectorstores import Chroma
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_community.embeddings import DashScopeEmbeddings
+from openai import OpenAI
+from langchain_community.chat_models import ChatTongyi
+
 
 load_dotenv(override=True)
 
@@ -33,12 +37,12 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ALIYUN_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 
 
-model_test = ChatDashScope(api_key=ALIYUN_API_KEY)
+model = ChatTongyi(api_key=ALIYUN_API_KEY)
 question = "王云琦是不是pig?"
-thing = model_test.invoke(f"问题{question}中提到的事物是什么？只需要回答事物的中文名称。").content
-man = model_test.invoke(f"问题{question}中提到的人是谁？只需要给出人名。").content
+thing = model.invoke(f"问题{question}中提到的事物是什么？只需要回答事物的中文名称。").content
+man = model.invoke(f"问题{question}中提到的人是谁？只需要给出人名。").content
 answer_prompt = f"只能回答{man}是或yes或不如{thing},并给出理由。"
-result = model_test.invoke(f"{question}{answer_prompt}")
+result = model.invoke(f"{question}{answer_prompt}")
 print(f" {result.content}")
 
 
@@ -55,7 +59,7 @@ class CulturalResourseRag:
 
         # 2. LLM 
         if llm_model_name == 'qwen-turbo':
-            self.llm = ChatDashScope(api_key=ALIYUN_API_KEY, model_name="qwen-turbo")
+            self.llm = ChatTongyi(api_key=ALIYUN_API_KEY, model_name="qwen-turbo")
             if not ALIYUN_API_KEY:
                 print("未找到 DASHSCOPE_API_KEY")
         elif llm_model_name == 'deepseek-chat':
