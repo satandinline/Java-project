@@ -41,7 +41,31 @@ class ResourceUploader:
         # 保存文件到本地
         with open(file_path, 'wb') as f:
             f.write(file_data)
-        
+      
+   计算哈希并查重
+    content_hash = self._calculate_file_hash(file_path)  # 调用哈希函数
+    conn = None
+    try:
+        conn = self._get_db_connection()
+        with conn.cursor() as cursor:
+            # 检查cultural_resources_from_user表中是否存在相同哈希
+            cursor.execute("""
+                SELECT id FROM cultural_resources_from_user 
+                WHERE content_hash = %s
+            """, (content_hash,))
+            if cursor.fetchone():  # 存在重复资源
+                os.remove(file_path)  # 删除已保存的文件
+                return {"success": False, "message": "上传失败：该资源已存在（重复内容）"}
+            
+            # 后续数据库操作...
+    except Exception as e:
+        # 异常处理：若数据库操作失败，删除已保存的文件
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        return {"success": False, "message": f"上传失败: {str(e)}"}
+    finally:
+        if conn:
+            conn.close()
         # 写入数据库+触发AI流程
         conn = None
         try:
@@ -440,4 +464,5 @@ def _calculate_file_hash(self, file_path: str) -> str:
         for chunk in iter(lambda: f.read(4096), b""):  # 分块读取大文件
             sha256_hash.update(chunk)
     return sha256_hash.hexdigest()
+
 
