@@ -238,3 +238,10 @@ CREATE TABLE IF NOT EXISTS `crawled_images` (
   `crawl_time` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '抓取时间',
   `tags` JSON COMMENT '标签 (使用JSON数组格式, e.g., ["京剧", "脸谱"])'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='爬虫抓取图像元数据表';
+-- 修改annotation_tasks表，增加标注方式字段
+ALTER TABLE `annotation_tasks` 
+ADD COLUMN `annotation_method` ENUM('ai', 'manual') DEFAULT 'ai' AFTER `task_type`;
+
+-- 修改annotation_records表，增加标注来源字段
+ALTER TABLE `annotation_records` 
+ADD COLUMN `annotation_source` ENUM('ai', 'manual') DEFAULT 'manual' AFTER `annotation_data`;
