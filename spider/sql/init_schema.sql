@@ -117,3 +117,10 @@ CREATE TABLE IF NOT EXISTS `annotation_records` (
   INDEX `idx_task` (`task_id`),
   INDEX `idx_annotator` (`annotator_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- 修改annotation_tasks表，增加标注方式字段
+ALTER TABLE `annotation_tasks` 
+ADD COLUMN `annotation_method` ENUM('ai', 'manual') DEFAULT 'ai' AFTER `task_type`;
+
+-- 修改annotation_records表，增加标注来源字段
+ALTER TABLE `annotation_records` 
+ADD COLUMN `annotation_source` ENUM('ai', 'manual') DEFAULT 'manual' AFTER `annotation_data`;
