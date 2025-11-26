@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 import pymysql
 from pymysql.cursors import DictCursor
+import hashlib
 
 class ResourceUploader:
     def __init__(self, db_config: Dict[str, Any]):
@@ -430,3 +431,13 @@ class ResourceUploader:
         finally:
             if conn:
                 conn.close()
+      import hashlib  # 需在文件顶部导入
+
+def _calculate_file_hash(self, file_path: str) -> str:
+    """计算文件的SHA-256哈希值"""
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):  # 分块读取大文件
+            sha256_hash.update(chunk)
+    return sha256_hash.hexdigest()
+
