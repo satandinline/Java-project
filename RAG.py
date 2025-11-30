@@ -71,17 +71,37 @@ class CulturalResourceRAG:
         self.performance_log = []
         
         # 7. Prompt模板
+
+        # 7.1 定义输出结构的Schema，用于指导模型
+        response_schemas = [
+        ResponseSchema(name="answer", description="针对用户问题的详细回答，语言风格需典雅、准确。"),
+        ResponseSchema(name="key_entities", description="回答中提到的关键文化实体（如节日名、习俗、文物等），以列表形式返回。"),
+        ResponseSchema(name="sources", description="回答所依据的参考资料来源（如《xx志》、xx网页），若无明确来源则为空。"),
+        ResponseSchema(name="confidence", description="对回答准确性的置信度评分（0-10）。")
+        ]
+        output_parser = StructuredOutputParser.from_response_schemas(response_schemas)
+        format_instructions = output_parser.get_format_instructions()
+
+        # 7.2 Prompt模板
         template = """
-        你是一个专业的文化资源问答助手
-        ---
-        上下文:
+        你是一位精通中国传统文化的资深研究员。请利用提供的【参考资料】来回答用户的【问题】。
+
+        【参考资料】：
         {context}
-        ---
-        问题: {question}
-        ---
-        你的回答:
+
+        【用户问题】：
+        {question}
+
+        【回答要求】：
+        1. **准确性**：严格基于参考资料回答，不要编造。如果资料不足，请明确说明。
+        2. **结构化**：必须按照下方的 JSON 格式输出，不要包含任何其他解释性文字。
+        3. **风格**：用词需优美、得体，符合公共文化服务的调性。
+
+        {format_instructions}
         """
-        self.rag_prompt = PromptTemplate(template=template, input_variables=["context", "question"])
+        self.rag_prompt = PromptTemplate(template=template, 
+                                         input_variables=["context", "question"],
+                                         partial_variables={"format_instructions": format_instructions})
         
         # 8. 自反思Prompt
         self.reflection_prompt = PromptTemplate(
@@ -114,7 +134,7 @@ class CulturalResourceRAG:
             {"context": self.retriever, "question": RunnablePassthrough()}
             | self.rag_prompt
             | self.model
-            | StrOutputParser()
+            | output_parser()
         )
         
         print("RAG初始化完成。")
