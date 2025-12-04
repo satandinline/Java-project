@@ -78,11 +78,9 @@ class CulturalResourceRAG:
             print(f"创建 retriever 出错: {e}")
             self.retriever = None
 
-        # 数据库配置
+        # 数据库配置（占位，不进行实际连接）
         self.database_name = database_name
         self.retrieval_tables = retrieval_tables or []
-        # 预检查数据库表是否存在，避免查询报错
-        self._check_db_tables()
 
         # 自反思与性能记录存储
         self.reflection_history = []
@@ -231,106 +229,15 @@ class CulturalResourceRAG:
             print(f"检索器调用错误: {e}")
         return []
 
-    def _check_db_tables(self):
-        """检查数据库中指定的表是否存在，给出缺失提示"""
-        if not self.retrieval_tables:
-            return
-        try:
-            db_url = f"sqlite:///{self.database_name}.db"
-            engine = create_engine(db_url)
-            inspector = inspect(engine)
-            existing_tables = inspector.get_table_names()
-            missing_tables = [t for t in self.retrieval_tables if t not in existing_tables]
-            if missing_tables:
-                print(f"警告：数据库中缺少以下表 {missing_tables}，查询时将自动跳过")
-                print("提示：可通过 create_test_tables() 方法创建测试表")
-        except Exception as e:
-            print(f"检查数据库表失败: {e}")
-
-    def create_test_tables(self):
-        """创建测试用数据库表并插入基础数据（用于调试）"""
-        try:
-            db_url = f"sqlite:///{self.database_name}.db"
-            engine = create_engine(db_url)
-            with engine.connect() as conn:
-                # 创建文化文物表
-                conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS cultural_artifacts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT,
-                    content TEXT,
-                    category TEXT,
-                    source TEXT
-                );
-                """))
-                # 创建历史记录表
-                conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS historical_records (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    event TEXT,
-                    content TEXT,
-                    time TEXT,
-                    source TEXT
-                );
-                """))
-                # 创建博物馆信息表
-                conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS museum_info (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    museum_name TEXT,
-                    content TEXT,
-                    location TEXT
-                );
-                """))
-                # 插入中秋节测试数据
-                conn.execute(text("""
-                INSERT OR IGNORE INTO cultural_artifacts (name, content, category, source)
-                VALUES ('中秋月饼', '中秋月饼是中秋节的传统食品，象征团圆美满', '食品', '《中国民俗志》');
-                """))
-                conn.commit()
-            print("测试表创建/更新成功，并插入了基础测试数据")
-        except Exception as e:
-            print(f"创建测试表失败: {e}")
-
     def query_database(self, query: str, table_names: List[str] = None) -> List[Dict]:
         """
-        从指定数据库表中检索相关内容
+        占位函数：从指定数据库表中检索相关内容（不执行实际数据库操作）
         :param query: 检索关键词
         :param table_names: 要查询的表名列表（默认使用初始化时的retrieval_tables）
-        :return: 检索到的结果列表（字典格式）
+        :return: 空列表（占位返回）
         """
-        if not table_names:
-            table_names = self.retrieval_tables
-        if not table_names:
-            return []
-        try:
-            db_url = f"sqlite:///{self.database_name}.db"
-            engine = create_engine(db_url)
-            inspector = inspect(engine)
-            existing_tables = inspector.get_table_names()
-            results = []
-            for table_name in table_names:
-                if table_name not in existing_tables:
-                    print(f"跳过不存在的表：{table_name}")
-                    continue
-                try:
-                    sql_query = f"SELECT * FROM {table_name} WHERE content LIKE :q LIMIT 10;"
-                    with engine.connect() as conn:
-                        result = conn.execute(text(sql_query), {"q": f"%{query}%"})
-                        rows = result.fetchall()
-                        for row in rows:
-                            try:
-                                row_dict = dict(row._mapping)
-                            except Exception:
-                                row_dict = dict(row)
-                            results.append(row_dict)
-                except Exception as e:
-                    print(f"查询表 {table_name} 出错: {e}")
-                    continue
-            return results
-        except Exception as e:
-            print(f"数据库查询错误: {e}")
-            return []
+        print("数据库查询功能已被禁用，返回空结果。")
+        return []
 
     def ingest_data(self, documents: List[Document]):
         """
@@ -416,13 +323,10 @@ class CulturalResourceRAG:
             print(f"向量数据库检索错误: {e}")
             context = ""
 
-        # 2. 数据库检索补充上下文
+        # 2. 数据库检索补充上下文（占位，不执行实际操作）
         if self.retrieval_tables:
             try:
-                db_results = self.query_database(query, self.retrieval_tables)
-                if db_results:
-                    db_context = "\n".join([str(result) for result in db_results])
-                    context = f"{context}\n\n数据库信息:\n{db_context}" if context else db_context
+                print("跳过数据库查询（功能已禁用）")
             except Exception as e:
                 print(f"数据库查询过程中出现错误: {e}")
 
@@ -683,12 +587,11 @@ class CulturalResourceRAG:
 
     def update_retrieval_tables(self, table_names: List[str]):
         """
-        更新数据库检索表列表
+        更新数据库检索表列表（占位函数）
         :param table_names: 新的检索表名列表
         """
         self.retrieval_tables = table_names
-        self._check_db_tables()
-        print(f"已更新检索表列表: {table_names}")
+        print(f"已更新检索表列表: {table_names} (数据库功能已禁用)")
 
 
 # 主函数（测试用）
@@ -715,9 +618,6 @@ if __name__ == '__main__':
     web_db_path = "./chroma_db_web"
     retrieval_tables = ["cultural_artifacts", "historical_records", "museum_info"]
     rag_system = CulturalResourceRAG(model=model, persist_directory=web_db_path, retrieval_tables=retrieval_tables)
-
-    # 创建测试表（解决表不存在问题）
-    rag_system.create_test_tables()
 
     # 测试：生成中秋节原创文化资源
     festival = "中秋节"
@@ -746,3 +646,6 @@ if __name__ == '__main__':
     # 输出性能摘要
     print("\n--- 系统性能摘要 ---")
     print(json.dumps(rag_system.get_performance_summary(), ensure_ascii=False, indent=2))
+
+
+
