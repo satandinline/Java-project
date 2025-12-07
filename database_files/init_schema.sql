@@ -13,17 +13,7 @@ USE java_project;
 SET NAMES utf8mb4;
 
 
--- 创建管理员角色并赋予所有权限
-create role 'manager'@'%';
-grant all privileges on *.* to 'manager'@'%' with grant option
 
--- 创建普通用户角色并赋予查询、
-create role 'users'@'%'
-grant select,insert,update,delete on users to 'users'@'%'
-grant select,insert on cultural_resources to 'users'@'%'
-grant select,insert on cultural_entities to 'users'@'%'
-grant select,insert,delete on qa_sessions to 'users'@'%'
-grant select,insert,delete on cultural_resources_from_user to 'users'@'%'
    
 -- --------------------------------------------------
 -- 1. 用户表 (users)
@@ -245,9 +235,12 @@ ADD COLUMN `annotation_method` ENUM('ai', 'manual') DEFAULT 'ai' AFTER `task_typ
 -- 修改annotation_records表，增加标注来源字段
 ALTER TABLE `annotation_records` 
 ADD COLUMN `annotation_source` ENUM('ai', 'manual') DEFAULT 'manual' AFTER `annotation_data`;
+
+
+
 -- 文化资源表：新增上传用户ID、审核状态、上传时间字段
 ALTER TABLE cultural_resources
-ADD COLUMN upload_user_id INT NOT NULL COMMENT '上传用户ID（关联users表）',
+ADD COLUMN upload_user_id BIGINT NOT NULL COMMENT '上传用户ID（关联users表）',
 ADD COLUMN ai_review_status VARCHAR(20) DEFAULT 'pending' COMMENT 'AI审核状态：pending-待审核/approved-通过/rejected-驳回',
 ADD COLUMN ai_review_remark TEXT COMMENT 'AI审核备注',
 ADD COLUMN manual_review_status VARCHAR(20) DEFAULT 'pending' COMMENT '人工审核状态：pending-待审核/approved-通过/rejected-驳回',
@@ -255,7 +248,29 @@ ADD COLUMN manual_review_remark TEXT COMMENT '人工审核备注',
 ADD COLUMN upload_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '上传时间',
 ADD CONSTRAINT fk_cr_upload_user FOREIGN KEY (upload_user_id) REFERENCES users(id);
 
+
+
+
 -- 标注记录表：新增「是否最新」和「创建时间」字段，支持修改AI标注结果
 ALTER TABLE annotation_records
 ADD COLUMN is_latest TINYINT(1) DEFAULT 1 COMMENT '是否为最新标注结果：1-是/0-否',
 ADD COLUMN create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '标注时间';
+
+
+
+
+-- 创建管理员角色并赋予所有权限
+create role 'manager'@'%';
+grant all privileges on *.* to 'manager'@'%' with grant option;
+
+-- 创建普通用户角色并赋予查询、
+create role 'users'@'%';
+grant select,insert,update,delete on users to 'users'@'%';
+grant select,insert on cultural_resources to 'users'@'%';
+grant select,insert on cultural_entities to 'users'@'%';
+grant select,insert,delete on qa_sessions to 'users'@'%';
+grant select,insert,delete on cultural_resources_from_user to 'users'@'%';
+
+
+
+
