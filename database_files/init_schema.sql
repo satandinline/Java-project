@@ -173,7 +173,7 @@ CREATE TABLE IF NOT EXISTS `annotation_records` (
 CREATE TABLE IF NOT EXISTS `cultural_resources_from_user` (
   `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
   `user_id` BIGINT NOT NULL COMMENT '上传用户ID',
-  `title` VARCHAR(255) COMMENT '标题',
+  `title` VARCHAR(255) COMMENT '节日',
   `resource_type` VARCHAR(50) COMMENT '资源类型（如：文本、图像）',
   `file_format` VARCHAR(20) COMMENT '文件格式（如：TXT, JPG）',
   `content_feature_data` LONGTEXT COMMENT '存储文本内容或特征向量的引用',

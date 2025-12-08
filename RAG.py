@@ -7,8 +7,13 @@ from typing import List, Dict, Optional, Tuple, Union
 import json
 import random
 import textwrap
+import re
+import time
+import urllib.parse
 
 import pandas as pd
+import pymysql
+from pymysql.cursors import DictCursor
 from dotenv import load_dotenv
 from langchain.output_parsers import StructuredOutputParser, ResponseSchema
 from langchain.schema import Document
@@ -18,41 +23,43 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from sqlalchemy import create_engine, text, inspect
 from tqdm import tqdm
 
-# 兼容Chroma向量库导入（根据langchain版本调整）
 from langchain_community.vectorstores import Chroma
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_community.document_loaders import WebBaseLoader
 from openai import OpenAI
+import requests
+from bs4 import BeautifulSoup
 
-# 加载环境变量（覆盖已有变量）
 load_dotenv(override=True)
 
-# 读取各类API密钥
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 KIMI_API_KEY = os.getenv("KIMI_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ALIYUN_API_KEY = os.getenv("DASHSCOPE_API_KEY") or os.getenv("ALIYUN_API_KEY")
+VOLC_SEEDREAM_API_KEY = os.getenv("VOLC_SEEDREAM_API_KEY")
+
+MYSQL_HOST = os.getenv("MYSQL_HOST", "127.0.0.1")
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER = os.getenv("MYSQL_USER", "root")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_DB = os.getenv("MYSQL_DB", "java-project")
 
 
 class CulturalResourceRAG:
     """
-    传统文化资源RAG系统
-    功能：
-    1. 基于向量检索+大模型实现传统文化问答
-    2. 支持从节日主题生成原创文化资源（故事/仪式/象征等）
-    3. 内置自反思机制评估回答质量
-    4. 兼容多模型/多检索器接口
+    传统节日文化资源RAG系统
+    支持从数据库和网页检索传统节日相关信息，生成高质量回答
+    同时支持基于节日主题生成原创文化资源内容
     """
 
     def __init__(self, model, embedding_model_name='text-embedding-ada-002',
-                 persist_directory="./chroma_db", database_name="culture",
-                 retrieval_tables=None):
+                 persist_directory="./chroma_db", database_name="java-project",
+                 retrieval_tables=None, db_config=None):
         print("正在初始化 RAG 系统")
         self.model = model
 
-        # 初始化嵌入模型（优先阿里云通义，降级为OpenAI）
         try:
             from langchain_community.embeddings import DashScopeEmbeddings
             self.embedding_model = DashScopeEmbeddings(
@@ -61,16 +68,13 @@ class CulturalResourceRAG:
             )
         except Exception as e:
             print(f"DashScopeEmbeddings 初始化失败: {e}，使用 OpenAIEmbeddings 作为备选。")
-            self.embedding_model = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
+            self.embedding_model = OpenAIEmbeddings()
 
-        # 文本分割器（按固定长度分割，保留重叠部分保证上下文连续）
         self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
 
-        # 初始化Chroma向量库（持久化存储）
         self.vector_store = Chroma(persist_directory=persist_directory, embedding_function=self.embedding_model)
         self._persist_directory = persist_directory
 
-        # 初始化检索器（返回Top5相关文档）
         try:
             self.retriever = self.vector_store.as_retriever(search_kwargs={"k": 5})
             print("检索器初始化成功")
@@ -78,9 +82,22 @@ class CulturalResourceRAG:
             print(f"创建 retriever 出错: {e}")
             self.retriever = None
 
-        # 数据库配置（占位，不进行实际连接）
         self.database_name = database_name
-        self.retrieval_tables = retrieval_tables or []
+        self.retrieval_tables = retrieval_tables or ["cultural_resources", "cultural_entities", 
+                                                      "entity_relationships", "AIGC_cultural_resources"]
+        
+        if db_config:
+            self.db_config = db_config
+        else:
+            self.db_config = {
+                "host": MYSQL_HOST,
+                "port": MYSQL_PORT,
+                "user": MYSQL_USER,
+                "password": MYSQL_PASSWORD,
+                "database": MYSQL_DB.replace("-", "_")
+            }
+        
+        self.db_connection = None
 
         # 自反思与性能记录存储
         self.reflection_history = []
@@ -96,9 +113,8 @@ class CulturalResourceRAG:
         self.output_parser = StructuredOutputParser.from_response_schemas(response_schemas)
         self.format_instructions = self.output_parser.get_format_instructions()
 
-        # 问答Prompt模板（清理缩进保证格式正确）
         template = textwrap.dedent("""
-        你是一位精通中国传统文化的资深研究员。请利用提供的【参考资料】来回答用户的【问题】。
+        你是一位专门研究中国传统节日的文化学者。请基于提供的【参考资料】回答用户关于传统节日的【问题】。
 
         【参考资料】：
         {context}
@@ -107,9 +123,10 @@ class CulturalResourceRAG:
         {question}
 
         【回答要求】：
-        1. 准确性：严格基于参考资料回答，不要编造。如果资料不足，请明确说明。
+        1. 准确性：严格依据参考资料回答，涉及节日名称、起源、习俗、传说、时间、地域特色等要准确无误。如资料不足，明确说明。
         2. 结构化：必须按照指定的JSON格式输出，不要包含任何其他解释性文字。
-        3. 风格：用词需优美、得体，符合公共文化服务的调性。
+        3. 风格：语言典雅、准确，符合公共文化服务场景，突出传统节日的文化内涵和民俗价值。
+        4. 重点：关注节日的文化意义、传统习俗、历史演变、地域特色等公共文化资源相关内容。
 
         {format_instructions}
         """)
@@ -117,17 +134,16 @@ class CulturalResourceRAG:
                                          input_variables=["context", "question"],
                                          partial_variables={"format_instructions": self.format_instructions})
 
-        # 自反思Prompt模板（评估回答质量）
         self.reflection_prompt = PromptTemplate(
             template=textwrap.dedent("""
-            你是一个AI助手，负责评估RAG系统的回答质量并提供改进建议。
+            你负责评估关于传统节日问题的回答质量。
 
             问题: {question}
             RAG系统回答: {answer}
             上下文: {context}
 
-            请评估回答的质量并提供以下信息：
-            1. 回答准确性（0-10分）
+            请评估回答质量并提供以下信息：
+            1. 回答准确性（0-10分），特别关注节日相关信息的准确性
             2. 是否需要更多信息（是/否）
             3. 改进建议
             4. 是否需要重新检索（是/否）
@@ -156,16 +172,17 @@ class CulturalResourceRAG:
         self.gen_output_parser = StructuredOutputParser.from_response_schemas(gen_schemas)
         self.gen_format_instructions = self.gen_output_parser.get_format_instructions()
 
-        # 文化资源生成Prompt模板
         self.gen_prompt_template = PromptTemplate(
             template=textwrap.dedent("""
-            你是一个富有创造力且有文化学素养的民俗学家/故事匠人。
-            输入：一个已存在的节日名称："{festival}"，以及可选提示："{hint}"。
-            任务：基于该节日的主题与情感，创造一个全新的公共文化资源（可以是新的故事、仪式、象征或节庆活动），
+            你是一位富有创造力的传统节日文化研究者。
+            输入：传统节日名称："{festival}"，以及可选提示："{hint}"。
+            任务：基于该传统节日的文化主题与情感内涵，创造一个新的公共文化资源（可以是新的故事、仪式、象征或节庆活动），
             要求：
               1) 必须原创，不要复刻或明显模仿任何已知传说或真实节日活动。
-              2) 风格自然、具有人情味，避免模板化文本。
-              3) 输出必须严格按照指定的JSON格式（不要包含多余文字）。
+              2) 必须深入体现传统节日的文化内涵、历史渊源、民俗传统和象征意义，具有公共文化资源的特性。
+              3) 内容要富有文化特色，不能看起来毫无文化特色，要体现传统元素和文化传承价值。
+              4) 风格自然、具有人情味，符合传统节日的文化氛围，避免模板化文本。
+              5) 输出必须严格按照指定的JSON格式（不要包含多余文字）。
             输出格式说明（遵守 JSON）：
             {format_instructions}
             """),
@@ -186,19 +203,23 @@ class CulturalResourceRAG:
                 resp = self.model.invoke(prompt_text)
                 if isinstance(resp, str):
                     return resp
-                if hasattr(resp, "content"):
-                    return resp.content
-                if hasattr(resp, "text"):
-                    return resp.text
+                content = getattr(resp, "content", None)
+                if content is not None:
+                    return str(content)
+                text = getattr(resp, "text", None)
+                if text is not None:
+                    return str(text)
                 return str(resp)
             elif callable(self.model):
                 resp = self.model(prompt_text)
                 if isinstance(resp, str):
                     return resp
-                if hasattr(resp, "content"):
-                    return resp.content
-                if hasattr(resp, "text"):
-                    return resp.text
+                content = getattr(resp, "content", None)
+                if content is not None:
+                    return str(content)
+                text = getattr(resp, "text", None)
+                if text is not None:
+                    return str(text)
                 return str(resp)
             else:
                 raise RuntimeError("未知模型接口：既没有 invoke 方法，也不可直接调用。")
@@ -208,9 +229,9 @@ class CulturalResourceRAG:
 
     def _call_retriever(self, query: str) -> List[Document]:
         """
-        统一检索器调用接口，兼容不同实现方式
-        :param query: 检索关键词
-        :return: 检索到的Document列表（无结果返回空列表）
+        从向量库检索相关文档
+        :param query: 查询关键词
+        :return: 检索到的文档列表
         """
         if not self.retriever:
             return []
@@ -229,20 +250,149 @@ class CulturalResourceRAG:
             print(f"检索器调用错误: {e}")
         return []
 
-    def query_database(self, query: str, table_names: List[str] = None) -> List[Dict]:
+    def _get_db_connection(self):
+        """获取数据库连接"""
+        try:
+            if self.db_connection is None or not self.db_connection.open:
+                self.db_connection = pymysql.connect(
+                    host=self.db_config["host"],
+                    port=self.db_config["port"],
+                    user=self.db_config["user"],
+                    password=self.db_config["password"],
+                    database=self.db_config["database"],
+                    charset="utf8mb4",
+                    cursorclass=DictCursor
+                )
+            return self.db_connection
+        except Exception as e:
+            print(f"数据库连接失败: {e}")
+            return None
+
+    def query_database(self, query: str, table_names: Optional[List[str]] = None) -> List[Dict]:
         """
-        占位函数：从指定数据库表中检索相关内容（不执行实际数据库操作）
+        从指定数据库表中检索相关内容
         :param query: 检索关键词
         :param table_names: 要查询的表名列表（默认使用初始化时的retrieval_tables）
-        :return: 空列表（占位返回）
+        :return: 检索结果列表
         """
-        print("数据库查询功能已被禁用，返回空结果。")
-        return []
+        if table_names is None:
+            table_names = self.retrieval_tables
+        
+        conn = self._get_db_connection()
+        if not conn:
+            return []
+        
+        results = []
+        keywords = query.split()
+        
+        try:
+            with conn.cursor() as cursor:
+                for table in table_names:
+                    if table == "cultural_resources":
+                        sql = """
+                            SELECT id, title, resource_type, content_feature_data, source_from, source_url
+                            FROM cultural_resources
+                            WHERE title LIKE %s OR content_feature_data LIKE %s
+                            LIMIT 10
+                        """
+                        pattern = f"%{query}%"
+                        cursor.execute(sql, (pattern, pattern))
+                        rows = cursor.fetchall()
+                        for row in rows:
+                            results.append({
+                                "table": "cultural_resources",
+                                "id": row.get("id"),
+                                "title": row.get("title", ""),
+                                "content": str(row.get("content_feature_data", ""))[:2000],
+                                "source": row.get("source_from", ""),
+                                "url": row.get("source_url", "")
+                            })
+                    
+                    elif table == "cultural_entities":
+                        sql = """
+                            SELECT id, entity_name, entity_type, description, source, 
+                                   period_era, cultural_region, cultural_value
+                            FROM cultural_entities
+                            WHERE entity_name LIKE %s OR description LIKE %s 
+                                  OR entity_type LIKE %s
+                            LIMIT 10
+                        """
+                        pattern = f"%{query}%"
+                        cursor.execute(sql, (pattern, pattern, pattern))
+                        rows = cursor.fetchall()
+                        for row in rows:
+                            content_parts = []
+                            if row.get("description"):
+                                content_parts.append(f"描述：{row.get('description')}")
+                            if row.get("cultural_value"):
+                                content_parts.append(f"文化价值：{row.get('cultural_value')}")
+                            if row.get("period_era"):
+                                content_parts.append(f"时期：{row.get('period_era')}")
+                            if row.get("cultural_region"):
+                                content_parts.append(f"文化区域：{row.get('cultural_region')}")
+                            
+                            results.append({
+                                "table": "cultural_entities",
+                                "id": row.get("id"),
+                                "title": row.get("entity_name", ""),
+                                "content": "；".join(content_parts) if content_parts else "",
+                                "source": row.get("source", ""),
+                                "entity_type": row.get("entity_type", "")
+                            })
+                    
+                    elif table == "entity_relationships":
+                        sql = """
+                            SELECT er.id, er.relationship_type, er.relationship_evidence,
+                                   ce1.entity_name as source_entity, ce2.entity_name as target_entity
+                            FROM entity_relationships er
+                            JOIN cultural_entities ce1 ON er.source_entity_id = ce1.id
+                            JOIN cultural_entities ce2 ON er.target_entity_id = ce2.id
+                            WHERE ce1.entity_name LIKE %s OR ce2.entity_name LIKE %s 
+                                  OR er.relationship_type LIKE %s
+                            LIMIT 10
+                        """
+                        pattern = f"%{query}%"
+                        cursor.execute(sql, (pattern, pattern, pattern))
+                        rows = cursor.fetchall()
+                        for row in rows:
+                            results.append({
+                                "table": "entity_relationships",
+                                "id": row.get("id"),
+                                "title": f"{row.get('source_entity')} - {row.get('relationship_type')} - {row.get('target_entity')}",
+                                "content": row.get("relationship_evidence", ""),
+                                "source": "",
+                                "relationship_type": row.get("relationship_type", "")
+                            })
+                    
+                    elif table == "AIGC_cultural_resources":
+                        sql = """
+                            SELECT id, title, resource_type, content_feature_data, source_from
+                            FROM AIGC_cultural_resources
+                            WHERE title LIKE %s OR content_feature_data LIKE %s
+                            LIMIT 10
+                        """
+                        pattern = f"%{query}%"
+                        cursor.execute(sql, (pattern, pattern))
+                        rows = cursor.fetchall()
+                        for row in rows:
+                            results.append({
+                                "table": "AIGC_cultural_resources",
+                                "id": row.get("id"),
+                                "title": row.get("title", ""),
+                                "content": str(row.get("content_feature_data", ""))[:2000],
+                                "source": row.get("source_from", ""),
+                                "url": ""
+                            })
+        
+        except Exception as e:
+            print(f"数据库查询错误: {e}")
+        
+        return results
 
     def ingest_data(self, documents: List[Document]):
         """
-        将文档分割后入库向量库
-        :param documents: 待入库的Document列表
+        将文档分割后存入向量库
+        :param documents: 待处理的文档列表
         """
         if not documents:
             print("没有需要加载的文档。")
@@ -253,10 +403,8 @@ class CulturalResourceRAG:
         try:
             if hasattr(self.vector_store, "add_documents"):
                 self.vector_store.add_documents(chunks)
-            elif hasattr(self.vector_store, "add"):
-                self.vector_store.add(chunks)
             else:
-                raise RuntimeError("当前 VectorStore 不支持 add_documents/add 方法")
+                raise RuntimeError("当前 VectorStore 不支持 add_documents 方法")
             if hasattr(self.vector_store, "persist"):
                 self.vector_store.persist()
             print(f"数据已成功加载并索引到 {self._persist_directory}")
@@ -265,11 +413,11 @@ class CulturalResourceRAG:
 
     def self_reflect(self, question: str, answer: str, context: str) -> Dict:
         """
-        对回答进行自反思评估
+        评估回答质量，提供改进建议
         :param question: 用户问题
-        :param answer: RAG生成的回答
+        :param answer: 生成的回答
         :param context: 检索到的上下文
-        :return: 反思评估结果（包含准确性评分、改进建议等）
+        :return: 评估结果字典
         """
         reflection_input = {"question": question, "answer": answer, "context": context}
         try:
@@ -310,25 +458,59 @@ class CulturalResourceRAG:
 
     def ask(self, query: str) -> Dict:
         """
-        RAG核心问答接口
+        回答用户关于传统节日的问题
         :param query: 用户问题
-        :return: 结构化回答（包含answer/key_entities/sources/confidence字段）
+        :return: 包含回答、关键实体、来源、置信度的字典
         """
         print(f"收到问题: {query}")
-        # 1. 向量库检索上下文
+        
+        context_parts = []
+        
         try:
             docs = self._call_retriever(query)
-            context = "\n".join([getattr(d, "page_content", str(d)) for d in docs]) if docs else ""
+            vector_context = "\n".join([getattr(d, "page_content", str(d)) for d in docs]) if docs else ""
+            if vector_context:
+                context_parts.append(f"向量库检索结果：\n{vector_context}")
         except Exception as e:
             print(f"向量数据库检索错误: {e}")
-            context = ""
+            vector_context = ""
 
-        # 2. 数据库检索补充上下文（占位，不执行实际操作）
+        db_results = []
         if self.retrieval_tables:
             try:
-                print("跳过数据库查询（功能已禁用）")
+                db_results = self.query_database(query, self.retrieval_tables)
+                if db_results:
+                    db_context_parts = []
+                    for result in db_results:
+                        db_text = f"来源表：{result.get('table', '')}\n"
+                        if result.get('title'):
+                            db_text += f"标题：{result.get('title')}\n"
+                        if result.get('content'):
+                            db_text += f"内容：{result.get('content')}\n"
+                        if result.get('source'):
+                            db_text += f"来源：{result.get('source')}\n"
+                        db_context_parts.append(db_text)
+                    context_parts.append(f"数据库检索结果：\n" + "\n---\n".join(db_context_parts))
             except Exception as e:
                 print(f"数据库查询过程中出现错误: {e}")
+        
+        context = "\n\n".join(context_parts) if context_parts else ""
+        
+        if not context or len(context.strip()) < 50:
+            print("数据库和向量库中未找到相关信息，尝试从网页爬取...")
+            try:
+                web_docs = self._crawl_web_content(query, max_results=3)
+                if web_docs:
+                    web_context = "\n\n".join([getattr(d, "page_content", str(d)) for d in web_docs])
+                    if web_context:
+                        context_parts.append(f"网页检索结果：\n{web_context}")
+                        context = "\n\n".join(context_parts)
+                        
+                        web_sources = [d.metadata.get("source", "") for d in web_docs if d.metadata.get("source")]
+                        if web_sources:
+                            print(f"已从以下网页获取信息: {', '.join(web_sources[:2])}")
+            except Exception as e:
+                print(f"网页爬取失败: {e}")
 
         # 3. 生成回答（保证结构化输出）
         try:
@@ -409,6 +591,65 @@ class CulturalResourceRAG:
 
         return parsed
 
+    def _crawl_web_content(self, query: str, max_results: int = 3) -> List[Document]:
+        """
+        当数据库中没有相关信息时，从网页获取传统节日相关内容
+        :param query: 查询关键词
+        :param max_results: 最多获取的结果数
+        :return: 文档列表
+        """
+        documents = []
+        search_query = f"{query} 传统节日"
+        
+        search_urls = [
+            f"https://www.baidu.com/s?wd={urllib.parse.quote(search_query)}",
+            f"https://www.sogou.com/web?query={urllib.parse.quote(search_query)}"
+        ]
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        
+        for url in search_urls[:1]:
+            try:
+                response = requests.get(url, headers=headers, timeout=10)
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.text, "html.parser")
+                    
+                    links = []
+                    for a_tag in soup.find_all("a", href=True)[:max_results * 2]:
+                        href = a_tag.get("href", "")
+                        if href and isinstance(href, str) and href.startswith("http"):
+                            if any(domain in href for domain in 
+                                ["baike.baidu.com", "zh.wikipedia.org", "baike.com", "sohu.com", "sina.com.cn"]):
+                                links.append(href)
+                    
+                    for link in links[:max_results]:
+                        try:
+                            time.sleep(1)
+                            page_response = requests.get(link, headers=headers, timeout=10)
+                            if page_response.status_code == 200:
+                                page_soup = BeautifulSoup(page_response.text, "html.parser")
+                                
+                                for script in page_soup(["script", "style"]):
+                                    script.decompose()
+                                
+                                text_content = page_soup.get_text()
+                                text_content = re.sub(r'\s+', ' ', text_content).strip()
+                                
+                                if len(text_content) > 200:
+                                    doc = Document(
+                                        page_content=text_content[:5000],
+                                        metadata={"source": link, "title": page_soup.title.string if page_soup.title else ""}
+                                    )
+                                    documents.append(doc)
+                        except Exception as e:
+                            continue
+            except Exception as e:
+                continue
+        
+        return documents
+
     def _get_additional_context(self, query: str, reflection_result: Dict) -> str:
         """
         根据反思建议获取补充检索上下文
@@ -426,10 +667,10 @@ class CulturalResourceRAG:
 
     def generate_resource_from_festival(self, festival: str, user_hint: str = "") -> Dict:
         """
-        基于节日主题生成原创文化资源
-        :param festival: 节日名称（如中秋节）
-        :param user_hint: 额外创作提示（可选）
-        :return: 结构化原创资源（包含title/type/story等字段）
+        基于传统节日主题生成原创文化资源
+        :param festival: 节日名称
+        :param user_hint: 可选的创作提示
+        :return: 包含标题、类型、故事等字段的字典
         """
         # 检索节日相关上下文（仅作创作灵感，避免抄袭）
         try:
@@ -514,9 +755,9 @@ class CulturalResourceRAG:
 
     def format_generated_resource(self, resource_dict: Dict) -> str:
         """
-        将生成的结构化文化资源转换为易读的文本格式（完整提取所有字段）
-        :param resource_dict: generate_resource_from_festival返回的结构化字典
-        :return: 整合后的纯文本字符串
+        将生成的文化资源格式化为易读文本
+        :param resource_dict: 文化资源字典
+        :return: 格式化后的文本字符串
         """
         # 提取所有字段并处理空值
         title = resource_dict.get("title", "未命名文化资源")
@@ -554,9 +795,9 @@ class CulturalResourceRAG:
 
     def extract_resource_fields(self, resource_dict: Dict) -> Tuple[str, str, str, str, str, str, str]:
         """
-        单独提取文化资源的所有字段（返回元组，便于单独使用）
-        :param resource_dict: generate_resource_from_festival返回的结构化字典
-        :return: (title, type, story, rituals, symbols, usage, novelty_explanation)
+        提取文化资源的各个字段
+        :param resource_dict: 文化资源字典
+        :return: 包含标题、类型、故事等字段的元组
         """
         return (
             resource_dict.get("title", ""),
@@ -570,8 +811,8 @@ class CulturalResourceRAG:
 
     def get_performance_summary(self) -> Dict:
         """
-        获取系统性能统计摘要
-        :return: 包含总问题数、平均准确率、高质量回答数等统计信息
+        获取系统性能统计信息
+        :return: 包含问题数、平均准确率等统计数据的字典
         """
         if not self.performance_log:
             return {"message": "暂无性能数据"}
@@ -587,8 +828,8 @@ class CulturalResourceRAG:
 
     def update_retrieval_tables(self, table_names: List[str]):
         """
-        更新数据库检索表列表（占位函数）
-        :param table_names: 新的检索表名列表
+        更新要检索的数据库表列表
+        :param table_names: 表名列表
         """
         self.retrieval_tables = table_names
         print(f"已更新检索表列表: {table_names} (数据库功能已禁用)")
@@ -602,22 +843,21 @@ if __name__ == '__main__':
         print("错误：未找到 API 密钥，请检查 .env 或环境变量")
         exit(1)
 
-    # 初始化模型（优先通义千问，降级为OpenAI）
     try:
         from langchain_community.chat_models import ChatTongyi
-        model = ChatTongyi(dashscope_api_key=ALIYUN_API_KEY, model_name="qwen-turbo")
+        model = ChatTongyi(dashscope_api_key=ALIYUN_API_KEY, model="qwen-turbo")
     except Exception as e:
         print(f"ChatTongyi 初始化失败: {e}，尝试使用 OpenAI ChatOpenAI 作为后备。")
         if OPENAI_API_KEY:
-            model = ChatOpenAI(api_key=OPENAI_API_KEY, model_name="gpt-3.5-turbo")
+            model = ChatOpenAI(model="gpt-3.5-turbo")
         else:
             print("无法初始化任何模型，请检查 API 密钥")
             exit(1)
 
-    # 初始化RAG系统
     web_db_path = "./chroma_db_web"
-    retrieval_tables = ["cultural_artifacts", "historical_records", "museum_info"]
-    rag_system = CulturalResourceRAG(model=model, persist_directory=web_db_path, retrieval_tables=retrieval_tables)
+    retrieval_tables = ["cultural_resources", "cultural_entities", "entity_relationships", "AIGC_cultural_resources"]
+    rag_system = CulturalResourceRAG(model=model, persist_directory=web_db_path, 
+                                     database_name="java-project", retrieval_tables=retrieval_tables)
 
     # 测试：生成中秋节原创文化资源
     festival = "中秋节"
