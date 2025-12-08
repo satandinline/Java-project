@@ -49,6 +49,7 @@
 
         <!-- 右侧 功能区 -->
         <div class="right-actions">
+          <a href="#" class="text-link" @click.prevent="activeView = 'aigc'" style="font-weight: 600; color: #409eff;">AIGC</a>
           <a href="#" class="text-link" @click.prevent="activeView = 'upload'">用户上传</a>
           <a href="#" class="text-link" @click.prevent="activeView = 'annotation'">标注任务</a>
           <button class="login-btn-pill" @click="handleAuthAction">
@@ -73,6 +74,7 @@ import ResourceUpload from './components/ResourceUpload.vue';
 import AnnotationTasks from './components/AnnotationTasks.vue';
 import Login from './components/Login.vue';
 import HomeView from './components/HomeView.vue';
+import AIGCView from './components/AIGCView.vue';
 
 const activeView = ref('login');
 const userInfo = ref(null);
@@ -93,6 +95,7 @@ const currentComponent = computed(() => {
     case 'home': return HomeView;
     case 'upload': return ResourceUpload;
     case 'annotation': return AnnotationTasks;
+    case 'aigc': return AIGCView;
     default: return HomeView;
   }
 });

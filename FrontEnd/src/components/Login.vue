@@ -2,16 +2,17 @@
   <div class="login-wrapper">
     <div class="login-box">
       <h2>公共文化资源系统</h2>
-      <p class="subtitle">管理员登录</p>
+      <p class="subtitle">{{ isRegisterMode ? '用户注册' : '用户登录' }}</p>
       
-      <form @submit.prevent="handleLogin">
+      <form @submit.prevent="isRegisterMode ? handleRegister() : handleLogin()">
         <div class="input-group">
-          <label>账号</label>
+          <label>用户名</label>
           <input 
             type="text" 
             v-model="username" 
-            placeholder="admin"
+            placeholder="请输入用户名（至少3个字符）"
             required
+            :disabled="isLoading"
           >
         </div>
         
@@ -20,16 +21,28 @@
           <input 
             type="password" 
             v-model="password" 
-            placeholder="任意字符即可登录"
+            placeholder="请输入密码（至少6个字符）"
             required
+            :disabled="isLoading"
           >
         </div>
         
-        <button type="submit" class="submit-btn">立即登录</button>
+        <div v-if="errorMessage" class="error-message">
+          {{ errorMessage }}
+        </div>
+        
+        <button type="submit" class="submit-btn" :disabled="isLoading">
+          <span v-if="isLoading">处理中...</span>
+          <span v-else>{{ isRegisterMode ? '立即注册' : '立即登录' }}</span>
+        </button>
       </form>
       
-      <div class="tips">
-        * 演示环境：输入任意账号密码即可进入
+      <div class="switch-mode">
+        <span v-if="!isRegisterMode">还没有账号？</span>
+        <span v-else>已有账号？</span>
+        <a href="#" @click.prevent="toggleMode" class="switch-link">
+          {{ isRegisterMode ? '立即登录' : '立即注册' }}
+        </a>
       </div>
     </div>
   </div>
@@ -40,27 +53,111 @@ import { ref } from 'vue';
 
 const username = ref('');
 const password = ref('');
+const isRegisterMode = ref(false);
+const isLoading = ref(false);
+const errorMessage = ref('');
 
 // 定义向父组件(App.vue)发送事件的方法
 const emit = defineEmits(['login-success']);
 
-const handleLogin = () => {
-  // 模拟登录请求
-  console.log('正在登录...');
-  
-  // 构造一个模拟的用户对象
-  const mockUser = {
-    id: 'admin_001',
-    username: username.value || 'Admin',
-    role: 'administrator',
-    token: 'mock-token-xyz-123'
-  };
+const toggleMode = () => {
+  isRegisterMode.value = !isRegisterMode.value;
+  errorMessage.value = '';
+  username.value = '';
+  password.value = '';
+};
 
-  // 1. 保存到本地存储（防止刷新后掉线）
-  localStorage.setItem('userInfo', JSON.stringify(mockUser));
+const handleLogin = async () => {
+  if (!username.value.trim() || !password.value.trim()) {
+    errorMessage.value = '请输入用户名和密码';
+    return;
+  }
 
-  // 2. 通知 App.vue 切换页面
-  emit('login-success', mockUser);
+  isLoading.value = true;
+  errorMessage.value = '';
+
+  try {
+    const response = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        username: username.value.trim(),
+        password: password.value
+      })
+    });
+
+    const result = await response.json();
+
+    if (result.success) {
+      // 保存用户信息到本地存储
+      const userInfo = {
+        id: result.user_info.id,
+        username: result.user_info.username,
+        role: result.user_info.role
+      };
+      localStorage.setItem('userInfo', JSON.stringify(userInfo));
+
+      // 通知 App.vue 切换页面
+      emit('login-success', userInfo);
+    } else {
+      errorMessage.value = result.message || '登录失败，请重试';
+    }
+  } catch (error) {
+    console.error('登录失败:', error);
+    errorMessage.value = '网络错误，请检查后端服务器是否启动';
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+const handleRegister = async () => {
+  if (!username.value.trim() || !password.value.trim()) {
+    errorMessage.value = '请输入用户名和密码';
+    return;
+  }
+
+  if (username.value.trim().length < 3) {
+    errorMessage.value = '用户名至少需要3个字符';
+    return;
+  }
+
+  if (password.value.length < 6) {
+    errorMessage.value = '密码至少需要6个字符';
+    return;
+  }
+
+  isLoading.value = true;
+  errorMessage.value = '';
+
+  try {
+    const response = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        username: username.value.trim(),
+        password: password.value
+      })
+    });
+
+    const result = await response.json();
+
+    if (result.success) {
+      // 注册成功后自动登录
+      errorMessage.value = '';
+      await handleLogin();
+    } else {
+      errorMessage.value = result.message || '注册失败，请重试';
+    }
+  } catch (error) {
+    console.error('注册失败:', error);
+    errorMessage.value = '网络错误，请检查后端服务器是否启动';
+  } finally {
+    isLoading.value = false;
+  }
 };
 </script>
 
@@ -131,13 +228,39 @@ h2 {
   transition: background 0.3s;
 }
 
-.submit-btn:hover {
+.submit-btn:hover:not(:disabled) {
   background-color: #3aa876;
 }
 
-.tips {
+.submit-btn:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+}
+
+.error-message {
+  margin-top: 10px;
+  padding: 10px;
+  background-color: #fee;
+  color: #c33;
+  border-radius: 4px;
+  font-size: 13px;
+  text-align: left;
+}
+
+.switch-mode {
   margin-top: 20px;
-  font-size: 12px;
-  color: #999;
+  font-size: 14px;
+  color: #666;
+}
+
+.switch-link {
+  color: #42b983;
+  text-decoration: none;
+  margin-left: 5px;
+  font-weight: 500;
+}
+
+.switch-link:hover {
+  text-decoration: underline;
 }
 </style>

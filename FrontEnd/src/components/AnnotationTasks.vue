@@ -97,37 +97,41 @@ onMounted(() => {
 });
 
 const fetchTasks = async () => {
-  // 模拟登录状态
   const userInfo = JSON.parse(localStorage.getItem('userInfo'));
-  if (!userInfo) {
+  if (!userInfo || !userInfo.id) {
+    console.error("用户未登录");
+    tasks.value = [];
     return;
   }
   
   try {
-    // 实际项目中替换为真实API调用
-    // 这里使用模拟数据
-    tasks.value = [
-      {
-        id: 1,
-        resource_id: 101,
-        title: "传统文化介绍.txt",
-        resource_type: "文本",
-        task_type: "实体",
-        status: "已标注",
-        annotation_method: "ai"
-      },
-      {
-        id: 2,
-        resource_id: 102,
-        title: "古代建筑.jpg",
-        resource_type: "图像",
-        task_type: "实体",
-        status: "待标注",
-        annotation_method: "ai"
+    const response = await fetch(`/api/annotation/tasks?user_id=${userInfo.id}${statusFilter.value ? `&status=${statusFilter.value}` : ''}`, {
+      method: 'GET',
+      headers: {
+        'X-User-Id': userInfo.id.toString(),
+        'Content-Type': 'application/json'
       }
-    ];
+    });
+    
+    const data = await response.json();
+    
+    if (data.success && data.tasks) {
+      tasks.value = data.tasks.map(task => ({
+        id: task.id,
+        resource_id: task.resource_id,
+        title: task.title || '未命名资源',
+        resource_type: task.resource_type || '未知',
+        task_type: task.task_type || '实体',
+        status: task.status || '待标注',
+        annotation_method: task.annotation_method || 'ai'
+      }));
+    } else {
+      console.error("获取任务失败:", data.message || '未知错误');
+      tasks.value = [];
+    }
   } catch (error) {
     console.error("获取任务失败:", error);
+    tasks.value = [];
   }
 };
 
