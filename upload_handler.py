@@ -8,6 +8,7 @@ import pymysql
 from pymysql.cursors import DictCursor
 import hashlib
 import sys
+import threading
 
 # 添加项目根目录到路径，以便导入db_connection
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -195,74 +196,245 @@ class ResourceUploader:
             if conn:
                 conn.close()
     
+    
     def trigger_ai_annotation(self, task_id: int) -> None:
         """
-        触发AI标注（预留API接口位置）
+        触发真实的AI标注（使用RAG系统）
         :param task_id: 标注任务ID
         """
-        # TODO: 未来将接入实际的AI标注API
-        # 目前使用模拟函数
-        from time import sleep
-        import threading
         
-        def mock_ai_annotation():
-            """模拟AI标注过程"""
-            # 模拟API调用延迟
-            sleep(3)
-            
-            # 模拟AI标注结果
-            mock_annotation = {
-                "entities": [
-                    {"name": "示例实体1", "type": "人物", "confidence": 0.85},
-                    {"name": "示例实体2", "type": "地点", "confidence": 0.92}
-                ],
-                "description": "AI自动标注结果"
-            }
-            
-            # 保存AI标注结果
-            conn = self._get_db_connection()
+        def real_ai_annotation():
+            """真实的AI标注流程"""
+            conn = None
+            rag_system = None
             try:
+                conn = self._get_db_connection()
+                if not conn:
+                    error_msg = "数据库连接失败"
+                    print(f"[AI标注] 任务{task_id}: {error_msg}")
+                    self._update_task_status_on_error(conn, task_id, error_msg)
+                    return
+                
                 with conn.cursor() as cursor:
-                    # 更新任务状态
+                    # 1. 获取标注任务和资源信息
                     cursor.execute("""
-                        UPDATE annotation_tasks 
-                        SET status = %s 
-                        WHERE id = %s
-                    """, ('已标注', task_id))
-                    
-                    # 获取资源ID
-                    cursor.execute("""
-                        SELECT resource_id FROM annotation_tasks WHERE id = %s
+                        SELECT t.resource_id, t.resource_source,
+                            cru.content_feature_data, cru.resource_type, cru.title
+                        FROM annotation_tasks t
+                        LEFT JOIN cultural_resources_from_user cru 
+                            ON t.resource_id = cru.id 
+                            AND t.resource_source = 'cultural_resources_from_user'
+                        WHERE t.id = %s
                     """, (task_id,))
-                    result = cursor.fetchone()
-                    if not result:
+                    
+                    task_info = cursor.fetchone()
+                    if not task_info:
+                        error_msg = "任务不存在"
+                        print(f"[AI标注] 任务{task_id}: {error_msg}")
+                        self._update_task_status_on_error(conn, task_id, error_msg)
                         return
                     
-                    resource_id = result['resource_id']
+                    # 2. 解析资源内容
+                    content_data = json.loads(task_info['content_feature_data'] or '{}')
+                    content_text = content_data.get('content_preview', '')
                     
-                    # 保存标注记录
-                    cursor.execute("""
-                        INSERT INTO annotation_records 
-                        (task_id, annotator_id, annotation_data, annotation_source, is_expert_reviewed)
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (
-                        task_id,
-                        -1,  # 用-1表示AI标注，非用户
-                        str(mock_annotation),
-                        'ai',
-                        False
-                    ))
-                    conn.commit()
+                    if not content_text:
+                        error_msg = "无可标注内容"
+                        print(f"[AI标注] 任务{task_id}: {error_msg}")
+                        self._update_task_status_on_error(conn, task_id, error_msg)
+                        return
+                    
+                    # 3. 调用RAG系统进行实体识别
+                    from AIGC.RAG import CulturalResourceRAG
+                    from langchain_community.chat_models import ChatTongyi
+                    from pydantic import SecretStr
+                    import os
+                    
+                    # 初始化模型
+                    ALIYUN_API_KEY = os.getenv("DASHSCOPE_API_KEY") or os.getenv("ALIYUN_API_KEY")
+                    if not ALIYUN_API_KEY:
+                        error_msg = "未配置API密钥"
+                        print(f"[AI标注] 任务{task_id}: {error_msg}")
+                        self._update_task_status_on_error(conn, task_id, error_msg)
+                        return
+                    
+                    model = ChatTongyi(api_key=SecretStr(ALIYUN_API_KEY), model="qwen-turbo")
+                    
+                    # 创建RAG系统实例（在数据库操作之外创建，避免长时间占用连接）
+                    rag_system = CulturalResourceRAG(
+                        model=model,
+                        persist_directory="./chroma_db_annotation",
+                        database_name="java_project"
+                    )
+                    
+                    # 先关闭数据库连接，RAG调用可能耗时较长
+                    conn.close()
+                    conn = None
+                    
+                    # 4. 构建标注提示词
+                    annotation_prompt = f"""
+    请从以下文化资源内容中识别并提取所有文化实体。
+
+    资源标题: {task_info['title']}
+    资源类型: {task_info['resource_type']}
+
+    内容:
+    {content_text}
+
+    要求:
+    1. 识别所有文化实体（人物、作品、事件、地点、其他）
+    2. 为每个实体标注类型（人物/作品/事件/地点/其他）
+    3. 评估识别的置信度（0-1之间）
+
+    请以JSON格式返回，例如:
+    {{
+    "entities": [
+        {{"name": "春节", "type": "事件", "confidence": 0.95}},
+        {{"name": "王安石", "type": "人物", "confidence": 0.88}}
+    ]
+    }}
+    """
+                    
+                    # 5. 调用RAG系统
+                    print(f"[AI标注] 任务{task_id}: 开始AI标注...")
+                    result = rag_system.ask(annotation_prompt)
+                    
+                    # 6. 解析标注结果
+                    answer = result.get('answer', '')
+                    entities = []
+                    
+                    try:
+                        # 尝试从回答中提取JSON
+                        import re
+                        json_match = re.search(r'\{.*\}', answer, re.DOTALL)
+                        if json_match:
+                            annotation_data = json.loads(json_match.group())
+                            entities = annotation_data.get('entities', [])
+                        else:
+                            # 如果没有JSON，从key_entities中提取
+                            key_entities = result.get('key_entities', [])
+                            entities = [
+                                {"name": e, "type": "其他", "confidence": 0.75}
+                                for e in key_entities
+                            ]
+                    except Exception as e:
+                        print(f"[AI标注] 任务{task_id}: 解析结果失败: {e}")
+                        # 降级方案: 从key_entities提取
+                        key_entities = result.get('key_entities', [])
+                        entities = [
+                            {"name": e, "type": "其他", "confidence": 0.75}
+                            for e in key_entities
+                        ]
+                    
+                    if not entities:
+                        print(f"[AI标注] 任务{task_id}: 未识别到实体")
+                        entities = [{"name": "未识别到实体", "type": "其他", "confidence": 0.0}]
+                    
+                    # 7. RAG调用完成后，重新获取数据库连接保存结果
+                    conn = self._get_db_connection()
+                    if not conn:
+                        print(f"[AI标注] 任务{task_id}: 保存结果时数据库连接失败")
+                        return
+                    
+                    try:
+                        with conn.cursor() as cursor:
+                            # 保存标注结果
+                            annotation_result = {
+                                "entities": entities,
+                                "description": f"AI自动标注 (模型: qwen-turbo)",
+                                "timestamp": str(datetime.now())
+                            }
+                            
+                            cursor.execute("""
+                                UPDATE annotation_tasks 
+                                SET status = %s 
+                                WHERE id = %s
+                            """, ('已标注', task_id))
+                            
+                            cursor.execute("""
+                                INSERT INTO annotation_records 
+                                (task_id, annotator_id, annotation_data, annotation_source, is_expert_reviewed)
+                                VALUES (%s, %s, %s, %s, %s)
+                            """, (
+                                task_id,
+                                -1,  # -1表示AI标注
+                                json.dumps(annotation_result, ensure_ascii=False),
+                                'ai',
+                                False
+                            ))
+                            
+                            conn.commit()
+                            print(f"[AI标注] 任务{task_id}: 标注完成，识别{len(entities)}个实体")
+                    finally:
+                        if conn:
+                            conn.close()
+                    
             except Exception as e:
-                print(f"AI标注模拟失败: {str(e)}")
-                if conn:
-                    conn.rollback()
+                error_msg = f"AI标注失败: {str(e)}"
+                print(f"[AI标注] 任务{task_id}: {error_msg}")
+                import traceback
+                traceback.print_exc()
+                # 更新任务状态为失败
+                self._update_task_status_on_error(conn, task_id, error_msg)
             finally:
+                # 清理RAG系统资源
+                if rag_system and hasattr(rag_system, 'vector_store'):
+                    try:
+                        # Chroma向量数据库会自动管理资源，但可以显式清理
+                        pass
+                    except:
+                        pass
                 if conn:
                     conn.close()
         
-        # 启动线程执行模拟标注，避免阻塞
-        threading.Thread(target=mock_ai_annotation, daemon=True).start()
+        # 启动后台线程执行AI标注
+        threading.Thread(target=real_ai_annotation, daemon=True).start()
+    
+    def _update_task_status_on_error(self, conn, task_id: int, error_msg: str):
+        """
+        更新任务状态为失败，并记录错误信息
+        :param conn: 数据库连接（可能为None）
+        :param task_id: 任务ID
+        :param error_msg: 错误信息
+        """
+        if not conn:
+            # 如果连接不存在，尝试获取新连接
+            try:
+                conn = self._get_db_connection()
+            except:
+                print(f"[AI标注] 任务{task_id}: 无法更新失败状态，数据库连接失败")
+                return
+        
+        if not conn:
+            return
+            
+        try:
+            with conn.cursor() as cursor:
+                # 更新任务状态为失败（可以添加一个'标注失败'状态，或保持'待标注'但记录错误）
+                # 这里选择更新状态为'待标注'，但记录错误信息到annotation_records
+                cursor.execute("""
+                    INSERT INTO annotation_records 
+                    (task_id, annotator_id, annotation_data, annotation_source, is_expert_reviewed)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    task_id,
+                    -1,  # -1表示AI标注
+                    json.dumps({
+                        "error": error_msg,
+                        "timestamp": str(datetime.now())
+                    }, ensure_ascii=False),
+                    'ai_error',
+                    False
+                ))
+                conn.commit()
+        except Exception as e:
+            print(f"[AI标注] 任务{task_id}: 更新失败状态时出错: {e}")
+            if conn:
+                conn.rollback()
+        finally:
+            if conn:
+                conn.close()
+
     
     def save_manual_annotation(self, task_id: int, user_id: int, annotation_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -291,7 +463,7 @@ class ResourceUploader:
                 """, (
                     task_id,
                     user_id,
-                    str(annotation_data),
+                    json.dumps(annotation_data, ensure_ascii=False),
                     'manual',
                     False  # 默认为非专家审核
                 ))

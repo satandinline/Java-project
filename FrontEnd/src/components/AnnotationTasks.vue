@@ -135,17 +135,27 @@ const fetchTasks = async () => {
   }
 };
 
-const viewAnnotation = (taskId) => {
-  // 模拟获取标注数据
-  currentTaskId.value = taskId;
-  currentAnnotation.value = {
-    entities: [
-      {"name": "示例实体1", "type": "人物"},
-      {"name": "示例实体2", "type": "地点"}
-    ],
-    description: "AI自动标注结果"
-  };
-  showAnnotationModal.value = true;
+const viewAnnotation = async (taskId) => {
+  try {
+    const userInfo = JSON.parse(localStorage.getItem('userInfo'));
+    const response = await fetch(`/api/annotation/tasks/${taskId}/details`, {
+      headers: {
+        'X-User-Id': userInfo.id.toString()
+      }
+    });
+    
+    const data = await response.json();
+    if (data.success) {
+      currentTaskId.value = taskId;
+      currentAnnotation.value = data.annotations || { entities: [], description: '' };
+      showAnnotationModal.value = true;
+    } else {
+      alert('获取标注详情失败: ' + data.message);
+    }
+  } catch (error) {
+    console.error('获取标注详情失败:', error);
+    alert('获取标注详情失败');
+  }
 };
 
 const editAnnotation = (taskId) => {
@@ -172,16 +182,28 @@ const removeEntity = (index) => {
 const saveAnnotation = async () => {
   if (!currentTaskId.value) return;
   
-  // 模拟保存标注
   try {
-    // 实际项目中替换为真实API调用
-    console.log("保存标注:", currentTaskId.value, currentAnnotation.value);
-    alert("标注已保存");
-    closeAnnotationModal();
-    fetchTasks(); // 刷新任务列表
+    const userInfo = JSON.parse(localStorage.getItem('userInfo'));
+    const response = await fetch(`/api/annotation/tasks/${currentTaskId.value}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': userInfo.id.toString()
+      },
+      body: JSON.stringify(currentAnnotation.value)
+    });
+    
+    const data = await response.json();
+    if (data.success) {
+      alert('标注已保存');
+      closeAnnotationModal();
+      fetchTasks();
+    } else {
+      alert('保存失败: ' + data.message);
+    }
   } catch (error) {
-    console.error("保存标注失败:", error);
-    alert("保存失败");
+    console.error('保存标注失败:', error);
+    alert('保存失败');
   }
 };
 </script>
