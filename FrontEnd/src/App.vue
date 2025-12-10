@@ -50,6 +50,7 @@
         <!-- 右侧 功能区 -->
         <div class="right-actions">
           <a href="#" class="text-link" @click.prevent="activeView = 'aigc'" style="font-weight: 600; color: #409eff;">AIGC</a>
+          <a href="#" class="text-link" :class="{ active: activeView === 'multimodal' }" @click.prevent="activeView = 'multimodal'">图文互搜</a>
           <a href="#" class="text-link" @click.prevent="activeView = 'upload'">用户上传</a>
           <a href="#" class="text-link" @click.prevent="activeView = 'annotation'">标注任务</a>
           <button class="login-btn-pill" @click="handleAuthAction">
@@ -75,16 +76,20 @@ import AnnotationTasks from './components/AnnotationTasks.vue';
 import Login from './components/Login.vue';
 import HomeView from './components/HomeView.vue';
 import AIGCView from './components/AIGCView.vue';
+import MultiModalSearch from './components/MultiModalSearch.vue';
 
-const activeView = ref('login');
+const activeView = ref('home');
+
+// 登录状态
 const userInfo = ref(null);
 
 onMounted(() => {
   const savedUser = localStorage.getItem('userInfo');
   if (savedUser) {
     userInfo.value = JSON.parse(savedUser);
-    activeView.value = 'home';
   }
+  // 未登录时默认进入登录页面
+  activeView.value = 'home';
 });
 
 const isLoggedIn = computed(() => !!userInfo.value);
@@ -96,20 +101,24 @@ const currentComponent = computed(() => {
     case 'upload': return ResourceUpload;
     case 'annotation': return AnnotationTasks;
     case 'aigc': return AIGCView;
+    case 'multimodal': return MultiModalSearch;
     default: return HomeView;
   }
 });
 
 const handleLoginSuccess = (userData) => {
-  userInfo.value = userData;
-  localStorage.setItem('userInfo', JSON.stringify(userData));
+  userInfo.value = userData || null;
+  if (userInfo.value) {
+    localStorage.setItem('userInfo', JSON.stringify(userInfo.value));
+  }
   activeView.value = 'home';
 };
 
 const handleAuthAction = () => {
+  // 退出登录
   userInfo.value = null;
   localStorage.removeItem('userInfo');
-  activeView.value = 'login';
+  activeView.value = 'home';
 };
 </script>
 
@@ -184,6 +193,7 @@ body { margin: 0; font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; bac
 /* 右侧按钮 */
 .right-actions { display: flex; align-items: center; gap: 20px; }
 .text-link { font-size: 14px; color: #666; text-decoration: none; }
+.text-link.active { font-weight: 600; color: #409eff; }
 .text-link:hover { color: #333; }
 .login-btn-pill { background-color: #409eff; color: white; border: none; padding: 6px 20px; border-radius: 20px; font-size: 13px; cursor: pointer; }
 .login-btn-pill:hover { background-color: #66b1ff; }
