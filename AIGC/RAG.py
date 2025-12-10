@@ -302,7 +302,27 @@ class CulturalResourceRAG:
             return []
         
         results = []
-        keywords = query.split()
+        # 提取/截断关键词，避免整段描述导致 LIKE 失效
+        raw_q = query.strip()
+        # 简单按常见分隔符拆分，取前2~3段，最多取前30字
+        parts = []
+        for sep in ["。", "！", "？", "，", ",", ".", ";", "；", "\n"]:
+            if sep in raw_q:
+                parts = raw_q.split(sep)
+                break
+        if not parts:
+            parts = [raw_q]
+        keywords = []
+        for p in parts:
+            p = p.strip()
+            if not p:
+                continue
+            keywords.append(p[:30])  # 每段最多30字
+            if len(keywords) >= 3:
+                break
+        if not keywords:
+            keywords = [raw_q[:30]]
+        
         
         # 将查询词转换为英文节日名称（用于匹配title字段）
         query_en = chinese_to_english_festival(query)
