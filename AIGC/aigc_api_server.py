@@ -122,7 +122,112 @@ def get_or_create_image_aigc_system(user_id: int, db_config: Optional[Dict] = No
     except Exception as e:
         print(f"[ImageAIGC] 为用户 {user_id} 创建ImageAIGC系统失败: {e}")
         return None
+@app.route('/api/multimodal/search', methods=['POST'])
+def multimodal_search():
+    temp_dir = None
+    image_paths = []
+    try:
+        mode = request.form.get('mode', 'text')
+        query = request.form.get('query', '').strip()
 
+        if 'images' in request.files:
+            import tempfile
+            import shutil
+            temp_dir = tempfile.mkdtemp()
+            try:
+                files = request.files.getlist('images')
+                for idx, file in enumerate(files):
+                    if file.filename:
+                        file_path = os.path.join(temp_dir, f"upload_{idx}_{file.filename}")
+                        file.save(file_path)
+                        image_paths.append(file_path)
+            except Exception as e:
+                print(f"[multimodal_search] 保存上传图片失败: {e}")
+
+        user_id = (request.headers.get('X-User-Id') or 
+                   request.headers.get('X-User-ID') or 
+                   request.form.get('user_id') or
+                   (request.json.get('user_id') if request.is_json else None))
+        if not user_id:
+            return jsonify({'success': False, 'message': '缺少用户ID'}), 400
+        try:
+            user_id = int(user_id)
+        except:
+            return jsonify({'success': False, 'message': '无效的用户ID'}), 401
+
+        user_db_config = auth_system.get_user_db_config(user_id)
+        if not user_db_config:
+            return jsonify({'success': False, 'message': '用户不存在或未配置数据库'}), 401
+        db_config = user_db_config['db_config']
+
+        rag_system = get_or_create_rag_system(user_id, db_config)
+        if not rag_system:
+            return jsonify({'success': False, 'message': '文本模型未配置，无法检索'}), 500
+
+        image_descriptions = []
+        if image_paths:
+            for p in image_paths:
+                try:
+                    desc = rag_system._read_image_info(p)
+                    if desc:
+                        image_descriptions.append(desc)
+                except Exception as e:
+                    print(f"[multimodal_search] 读取图片信息失败: {e}")
+
+        query_parts = []
+        if query:
+            query_parts.append(query)
+        if image_descriptions:
+            query_parts.append(" ".join(image_descriptions))
+        final_query = " ".join(query_parts).strip()
+        if not final_query:
+            return jsonify({'success': False, 'message': '缺少查询内容或图片描述失败'}), 400
+
+        vector_results = []
+        if getattr(rag_system, "retriever", None):
+            try:
+                docs = rag_system._search_vector(final_query)
+                for doc in docs[:6]:
+                    vector_results.append({
+                        "content": getattr(doc, "page_content", str(doc))[:500],
+                        "metadata": getattr(doc, "metadata", {})
+                    })
+            except Exception as e:
+                print(f"[multimodal_search] 向量检索失败: {e}")
+
+        db_results = []
+        try:
+            db_results = rag_system.query_database(final_query)
+        except Exception as e:
+            print(f"[multimodal_search] 数据库检索失败: {e}")
+
+        response = {
+            "success": True,
+            "query_used": final_query,
+            "image_descriptions": image_descriptions,
+            "vector_results": vector_results,
+            "database_results": db_results
+        }
+        return jsonify(response)
+    except Exception as e:
+        import traceback
+        print(f"[multimodal_search] 未处理异常: {e}")
+        print(traceback.format_exc())
+        return jsonify({'success': False, 'message': f'服务器错误: {e}'}), 500
+    finally:
+        if image_paths:
+            for p in image_paths:
+                try:
+                    if os.path.exists(p):
+                        os.remove(p)
+                except:
+                    pass
+        if temp_dir:
+            try:
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except:
+                pass
 @app.route('/api/auth/register', methods=['POST'])
 def register():
     """用户注册接口"""
