@@ -6,10 +6,19 @@ flask>=2.3.0
 flask-cors>=4.0.0
 
 # LangChain相关（RAG和AIGC核心依赖）
-langchain>=0.1.0
-langchain-openai>=0.0.5
-langchain-community>=0.0.20
-langchain-core>=0.1.0
+langchain==0.3.26
+langchain-core==0.3.72
+langchain-community==0.3.27
+langchain-text-splitters==0.3.8
+langchain-openai==0.3.28
+langchain-ollama==0.3.3
+langchain-chroma==0.2.5
+langchain-experimental==0.3.4
+langchain-deepseek==0.1.3
+langchain-gemini==0.1.1
+langchain-google==0.1.1
+langchain-kimi==0.1.1
+langchain-tavily==0.2.7
 
 # 数据库
 pymysql>=1.1.0
