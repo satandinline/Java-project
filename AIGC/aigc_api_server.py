@@ -1334,6 +1334,109 @@ def get_annotation_tasks():
             'message': f'获取任务失败：{str(e)}'
         }), 500
 
+@app.route('/api/annotation/tasks/<int:task_id>/details', methods=['GET'])
+def get_annotation_details(task_id):
+    """获取标注任务详情"""
+    try:
+        user_id = request.headers.get('X-User-Id')
+        if not user_id:
+            return jsonify({'success': False, 'message': '缺少用户信息'}), 400
+        
+        from db_connection import get_user_db_connection
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor() as cursor:
+                # 获取任务信息
+                cursor.execute("""
+                    SELECT t.id, t.resource_id, t.resource_source, t.status,
+                           cru.content_feature_data, cru.title
+                    FROM annotation_tasks t
+                    LEFT JOIN cultural_resources_from_user cru 
+                        ON t.resource_id = cru.id 
+                        AND t.resource_source = 'cultural_resources_from_user'
+                    WHERE t.id = %s
+                """, (task_id,))
+                
+                task = cursor.fetchone()
+                if not task:
+                    return jsonify({'success': False, 'message': '任务不存在'}), 404
+                
+                # 获取标注记录
+                cursor.execute("""
+                    SELECT annotation_data, annotation_source, created_at
+                    FROM annotation_records
+                    WHERE task_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """, (task_id,))
+                
+                record = cursor.fetchone()
+                annotations = None
+                if record:
+                    try:
+                        annotations = json.loads(record['annotation_data'])
+                    except:
+                        annotations = {"entities": [], "description": "解析失败"}
+                
+                # 解析资源内容
+                content_data = json.loads(task['content_feature_data'] or '{}')
+                
+                return jsonify({
+                    'success': True,
+                    'task_id': task_id,
+                    'resource_id': task['resource_id'],
+                    'title': task['title'],
+                    'status': task['status'],
+                    'resource_content': content_data.get('content_preview', ''),
+                    'annotations': annotations
+                })
+        finally:
+            conn.close()
+            
+    except Exception as e:
+        print(f"[API] 获取标注详情失败: {e}")
+        return jsonify({'success': False, 'message': f'获取失败: {str(e)}'}), 500
+
+
+@app.route('/api/annotation/tasks/<int:task_id>', methods=['PUT'])
+def update_annotation(task_id):
+    """更新标注任务"""
+    try:
+        user_id = int(request.headers.get('X-User-Id', 0))
+        if not user_id:
+            return jsonify({'success': False, 'message': '缺少用户信息'}), 400
+        
+        data = request.json
+        entities = data.get('entities', [])
+        description = data.get('description', '')
+        
+        from upload_handler import ResourceUploader
+        from login import AuthSystem
+        
+        auth_system = AuthSystem()
+        user_config = auth_system.get_user_db_config(user_id)
+        if not user_config:
+            return jsonify({'success': False, 'message': '用户不存在'}), 401
+        
+        uploader = ResourceUploader(user_id=user_id, db_config=user_config['db_config'])
+        
+        annotation_data = {
+            "entities": entities,
+            "description": description
+        }
+        
+        result = uploader.save_manual_annotation(task_id, user_id, annotation_data)
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        print(f"[API] 更新标注失败: {e}")
+        return jsonify({'success': False, 'message': f'更新失败: {str(e)}'}), 500
+
+
 if __name__ == '__main__':
     print("启动AIGC API服务器...")
     print("注意：RAG和ImageAIGC系统将按用户动态创建")
