@@ -22,6 +22,13 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM 启动搜索服务
+echo 正在启动全文检索服务 (Port: 5050)...
+REM "start" 命令会打开一个新的 cmd 窗口运行 python
+REM "Search Service" 是窗口标题
+REM cmd /k 保证窗口不会自动关闭，方便你看报错
+start "Search Service (5050)" cmd /k "python search_service.py"
+
 REM 进入前端目录
 cd FrontEnd
 

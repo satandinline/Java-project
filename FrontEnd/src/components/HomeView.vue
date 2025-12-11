@@ -1,76 +1,65 @@
 <template>
   <div class="home-container">
     
-    <!-- 顶部 3D 轮播区域 -->
+    <!-- 顶部 3D 轮播区域 (保持不变) -->
     <div class="carousel-section">
       <div class="carousel-stage">
-        
-        <!-- 左侧：显示上一条视频的【第一帧】 -->
         <div class="card side left" @click="prevSlide">
-          <!-- 改动：这里以前是 img，现在改成 video -->
-          <!-- muted: 静音 (防止意外播放声音) -->
-          <!-- preload="metadata": 预加载元数据，让浏览器显示第一帧 -->
-          <video 
-            :src="prevItem.videoSrc" 
-            class="cover-video" 
-            muted 
-            preload="metadata"
-          ></video>
+          <video :src="prevItem.videoSrc" class="cover-video" muted preload="metadata"></video>
           <div class="mask"></div>
         </div>
-
-        <!-- 中间：正在播放的视频 -->
         <div class="card center">
           <div class="video-box">
-            <video 
-              :key="currentItem.id" 
-              :src="currentItem.videoSrc" 
-              autoplay 
-              muted 
-              controls
-              @ended="handleVideoEnd"
-            ></video>
+            <video :key="currentItem.id" :src="currentItem.videoSrc" autoplay muted controls @ended="handleVideoEnd"></video>
           </div>
         </div>
-
-        <!-- 右侧：显示下一条视频的【第一帧】 -->
         <div class="card side right" @click="nextSlide">
-          <!-- 改动：同左侧，改成 video -->
-          <video 
-            :src="nextItem.videoSrc" 
-            class="cover-video" 
-            muted 
-            preload="metadata"
-          ></video>
+          <video :src="nextItem.videoSrc" class="cover-video" muted preload="metadata"></video>
           <div class="mask"></div>
         </div>
-
       </div>
-
-      <!-- 底部指示点 -->
       <div class="dots">
-        <span 
-          v-for="(item, index) in mediaList" 
-          :key="index" 
-          :class="{ active: currentIndex === index }"
-          @click="switchToIndex(index)"
-        ></span>
+        <span v-for="(item, index) in mediaList" :key="index" :class="{ active: currentIndex === index }" @click="switchToIndex(index)"></span>
       </div>
     </div>
 
-    <!-- 搜索栏 (保持不变) -->
+    <!-- ==================== 修改开始：搜索栏 ==================== -->
     <div class="search-section">
       <div class="search-bar">
-        <input type="text" placeholder="请输入检索词......" />
-        <button class="ai-search-btn">AI检索</button>
+        <!-- 1. 绑定 v-model 和回车事件 -->
+        <input 
+          type="text" 
+          v-model="searchQuery" 
+          @keyup.enter="handleSearch"
+          placeholder="请输入检索词 (例如：寒食节)..." 
+        />
+        
+        <!-- 2. 绑定点击事件，处理加载状态 -->
+        <button class="ai-search-btn" @click="handleSearch" :disabled="isSearching">
+          {{ isSearching ? '检索中...' : '全文检索' }}
+        </button>
+      </div>
+
+      <!-- 3. 新增：如果是搜索模式，显示一个返回按钮 -->
+      <div v-if="isSearchMode" style="margin-left: 15px;">
+        <button class="reset-btn" @click="resetToDefault">
+          ✕ 返回全部列表
+        </button>
       </div>
     </div>
+    <!-- ==================== 修改结束：搜索栏 ==================== -->
 
     <!-- 底部资源卡片 -->
     <div class="resources-section">
+      <!-- 搜索结果为空的提示 -->
+      <div v-if="isSearchMode && resourceList.length === 0" style="text-align: center; color: #999; margin-bottom: 30px;">
+        未找到与“{{ searchQuery }}”相关的内容
+      </div>
+
       <div class="resource-grid">
         <div class="resource-item" v-for="item in resourceList" :key="item.id">
           <div class="res-img-container">
+            <!-- 注意：搜索接口目前可能没有图片，会显示暂无图片 -->
             <img 
               v-if="item.image_url" 
               :src="item.image_url" 
@@ -82,55 +71,32 @@
             </div>
           </div>
           <div class="res-info">
+            <!-- 搜索结果的 title 会映射到 entity_name -->
             <h3 class="res-entity-name">{{ item.entity_name }}</h3>
+            <!-- 搜索结果的 snippet 会映射到 description -->
             <p class="res-description">{{ item.description }}</p>
+            
+            <!-- 如果是搜索结果，显示来源链接 -->
+            <a v-if="item.source_url && isSearchMode" :href="item.source_url" target="_blank" style="font-size: 12px; color: #409eff; margin-top: 10px; display: block;">
+              查看来源 &rarr;
+            </a>
           </div>
         </div>
       </div>
       
-      <!-- 分页控件 -->
-      <div class="pagination">
-        <button 
-          class="page-btn" 
-          :disabled="currentPage === 1" 
-          @click="goToPage(currentPage - 1)"
-        >
-          上一页
-        </button>
-        
+      <!-- ==================== 修改：分页控件 (仅在非搜索模式下显示) ==================== -->
+      <div class="pagination" v-if="!isSearchMode && resourceList.length > 0">
+        <button class="page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">上一页</button>
         <div class="page-numbers">
-          <!-- 显示前后邻近3页 -->
           <template v-for="pageNum in visiblePages" :key="pageNum">
-            <button
-              v-if="pageNum !== '...'"
-              class="page-number"
-              :class="{ active: pageNum === currentPage }"
-              @click="goToPage(pageNum)"
-            >
-              {{ pageNum }}
-            </button>
+            <button v-if="pageNum !== '...'" class="page-number" :class="{ active: pageNum === currentPage }" @click="goToPage(pageNum)">{{ pageNum }}</button>
             <span v-else class="page-ellipsis">...</span>
           </template>
         </div>
-        
-        <button 
-          class="page-btn" 
-          :disabled="currentPage === totalPages" 
-          @click="goToPage(currentPage + 1)"
-        >
-          下一页
-        </button>
-        
+        <button class="page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">下一页</button>
         <div class="page-jump">
           <span>跳转到</span>
-          <input 
-            type="number" 
-            v-model.number="jumpPage" 
-            :min="1" 
-            :max="totalPages"
-            @keyup.enter="jumpToPage"
-            class="page-input"
-          />
+          <input type="number" v-model.number="jumpPage" :min="1" :max="totalPages" @keyup.enter="jumpToPage" class="page-input" />
           <span>页</span>
           <button class="jump-btn" @click="jumpToPage">确定</button>
         </div>
@@ -143,63 +109,42 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
 
-// --- 1. 数据准备 ---
-// 改动：删除了 cover 字段，只保留 videoSrc
+// --- 轮播图数据 (保持不变) ---
 const mediaList = [
-  { 
-    id: 1, 
-    videoSrc: '/videos/v1.mp4'
-  },
-  { 
-    id: 2, 
-    videoSrc: '/videos/v2.mp4'
-  },
-  { 
-    id: 3, 
-    videoSrc: '/videos/v3.mp4'
-  }
+  { id: 1, videoSrc: '/videos/v1.mp4' },
+  { id: 2, videoSrc: '/videos/v2.mp4' },
+  { id: 3, videoSrc: '/videos/v3.mp4' }
 ];
-
 const currentIndex = ref(0);
-
-// --- 2. 计算属性 ---
 const currentItem = computed(() => mediaList[currentIndex.value]);
-
 const prevItem = computed(() => {
   const prevIndex = (currentIndex.value - 1 + mediaList.length) % mediaList.length;
   return mediaList[prevIndex];
 });
-
 const nextItem = computed(() => {
   const nextIndex = (currentIndex.value + 1) % mediaList.length;
   return mediaList[nextIndex];
 });
+const nextSlide = () => currentIndex.value = (currentIndex.value + 1) % mediaList.length;
+const prevSlide = () => currentIndex.value = (currentIndex.value - 1 + mediaList.length) % mediaList.length;
+const switchToIndex = (index) => currentIndex.value = index;
+const handleVideoEnd = () => nextSlide();
 
-// --- 3. 切换逻辑 ---
-const nextSlide = () => {
-  currentIndex.value = (currentIndex.value + 1) % mediaList.length;
-};
 
-const prevSlide = () => {
-  currentIndex.value = (currentIndex.value - 1 + mediaList.length) % mediaList.length;
-};
+// --- 资源列表与搜索逻辑 ---
 
-const switchToIndex = (index) => {
-  currentIndex.value = index;
-};
-
-const handleVideoEnd = () => {
-  nextSlide();
-};
-
-// 底部卡片数据
 const resourceList = ref([]);
 const currentPage = ref(1);
 const totalPages = ref(1);
 const jumpPage = ref(1);
 const isLoading = ref(false);
 
-// 获取资源列表
+// ==================== 新增：搜索相关状态 ====================
+const searchQuery = ref('');      // 搜索关键词
+const isSearching = ref(false);   // 是否正在请求搜索接口
+const isSearchMode = ref(false);  // 是否处于“搜索结果展示模式”
+
+// 1. 获取默认资源列表 (保持原有逻辑，但增加重置搜索模式)
 const fetchResources = async (page = 1) => {
   if (isLoading.value) return;
   isLoading.value = true;
@@ -213,28 +158,72 @@ const fetchResources = async (page = 1) => {
       currentPage.value = data.pagination.page;
       totalPages.value = data.pagination.total_pages;
       jumpPage.value = currentPage.value;
+      
+      // 确保退出搜索模式
+      isSearchMode.value = false;
     } else {
       console.error('获取资源失败:', data.message);
-      resourceList.value = [];
     }
   } catch (error) {
     console.error('获取资源失败:', error);
-    resourceList.value = [];
   } finally {
     isLoading.value = false;
   }
 };
 
-// 跳转到指定页
+// 2. 新增：处理搜索逻辑
+const handleSearch = async () => {
+  const q = searchQuery.value.trim();
+  if (!q) return;
+
+  isSearching.value = true;
+  resourceList.value = []; // 先清空列表
+
+  try {
+    // 调用 Python 写好的 5000 端口接口
+    const response = await fetch(`http://127.0.0.1:5050/api/search?q=${encodeURIComponent(q)}`);
+    const resData = await response.json();
+
+    if (resData.code === 200) {
+      // 【关键】数据映射：把搜索接口的数据格式，转成卡片需要的格式
+      // Python 返回: { title, snippet, tags, source_url }
+      // 前端卡片需要: { entity_name, description, image_url }
+      resourceList.value = resData.data.map(item => ({
+        id: item.id,
+        entity_name: item.title,      // 标题 -> 实体名
+        description: item.snippet,    // 摘要 -> 描述
+        image_url: item.image_url,              // 搜索接口返回的图片URL
+        source_url: item.source_url   // 保留来源链接
+      }));
+      
+      // 标记为搜索模式 (隐藏分页)
+      isSearchMode.value = true;
+    } else {
+      alert('搜索出错: ' + resData.msg);
+    }
+  } catch (error) {
+    console.error('搜索请求失败:', error);
+    alert('连接搜索服务失败，请确认 search_service.py 已运行');
+  } finally {
+    isSearching.value = false;
+  }
+};
+
+// 3. 新增：重置回默认列表
+const resetToDefault = () => {
+  searchQuery.value = '';
+  isSearchMode.value = false;
+  fetchResources(1); // 重新加载第一页数据
+};
+
+// ==================== 原有分页逻辑 (保持不变) ====================
 const goToPage = (page) => {
   if (page >= 1 && page <= totalPages.value && page !== currentPage.value) {
     fetchResources(page);
-    // 滚动到资源区域
     window.scrollTo({ top: document.querySelector('.resources-section')?.offsetTop - 100, behavior: 'smooth' });
   }
 };
 
-// 输入页码跳转
 const jumpToPage = () => {
   const page = parseInt(jumpPage.value);
   if (page >= 1 && page <= totalPages.value) {
@@ -245,64 +234,57 @@ const jumpToPage = () => {
   }
 };
 
-// 计算可见的页码（当前页前后3页）
 const visiblePages = computed(() => {
+  // ... (保持原有的分页计算代码)
   const pages = [];
   const current = currentPage.value;
   const total = totalPages.value;
-  
   if (total <= 7) {
-    // 如果总页数少于等于7，显示所有页码
-    for (let i = 1; i <= total; i++) {
-      pages.push(i);
-    }
+    for (let i = 1; i <= total; i++) pages.push(i);
   } else {
-    // 显示前后3页
     if (current <= 4) {
-      // 前几页
-      for (let i = 1; i <= 5; i++) {
-        pages.push(i);
-      }
-      pages.push('...');
-      pages.push(total);
+      for (let i = 1; i <= 5; i++) pages.push(i);
+      pages.push('...'); pages.push(total);
     } else if (current >= total - 3) {
-      // 后几页
-      pages.push(1);
-      pages.push('...');
-      for (let i = total - 4; i <= total; i++) {
-        pages.push(i);
-      }
+      pages.push(1); pages.push('...');
+      for (let i = total - 4; i <= total; i++) pages.push(i);
     } else {
-      // 中间页
-      pages.push(1);
-      pages.push('...');
-      for (let i = current - 2; i <= current + 2; i++) {
-        pages.push(i);
-      }
-      pages.push('...');
-      pages.push(total);
+      pages.push(1); pages.push('...');
+      for (let i = current - 2; i <= current + 2; i++) pages.push(i);
+      pages.push('...'); pages.push(total);
     }
   }
-  
   return pages;
 });
 
-// 图片加载错误处理
 const handleImageError = (event) => {
   event.target.style.display = 'none';
   const placeholder = event.target.nextElementSibling;
-  if (placeholder && placeholder.classList.contains('res-img-placeholder')) {
-    placeholder.style.display = 'flex';
-  }
+  if (placeholder) placeholder.style.display = 'flex';
 };
 
-// 初始化加载
+// 初始化
 onMounted(() => {
   fetchResources(1);
 });
 </script>
 
 <style scoped>
+/* 原有的样式保持不变，只添加一个返回按钮的样式 */
+.reset-btn {
+  padding: 10px 15px;
+  background-color: #f56c6c;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.3s;
+}
+.reset-btn:hover {
+  background-color: #ff4d4f;
+}
+
 .home-container {
   max-width: 1600px;
   margin: 0 auto;
@@ -380,6 +362,7 @@ onMounted(() => {
 .search-bar input { flex: 1; border: none; padding: 18px 25px; outline: none; background: white; font-size: 16px; }
 .ai-search-btn { background-color: #409eff; color: white; border: none; padding: 0 40px; cursor: pointer; font-size: 16px; font-weight: 500; transition: background 0.3s; }
 .ai-search-btn:hover { background-color: #66b1ff; }
+.ai-search-btn:disabled { background-color: #a0cfff; cursor: not-allowed; }
 
 /* 资源卡片区域 */
 .resources-section {

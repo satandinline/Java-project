@@ -86,7 +86,9 @@ CREATE TABLE IF NOT EXISTS `cultural_entities` (
   INDEX `idx_entity_type` (`entity_type`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='文化实体表';
 
-
+ALTER TABLE `cultural_entities`
+  ADD FULLTEXT INDEX `idx_ce_search` (`entity_name`, `description`)
+  WITH PARSER ngram;
 
 
 
@@ -316,7 +318,9 @@ CREATE TABLE IF NOT EXISTS `AIGC_cultural_entities` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AIGC生成的文化实体表';
 
 
-
+ALTER TABLE `AIGC_cultural_entities`
+  ADD FULLTEXT INDEX `idx_ace_search` (`entity_name`, `description`)
+  WITH PARSER ngram;
 
 
 -- --------------------------------------------------
