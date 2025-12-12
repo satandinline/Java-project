@@ -1,7 +1,21 @@
 # -*- coding: utf-8 -*-
 """
 自动执行 init_schema.sql 脚本
-用于初始化或更新数据库结构
+用于初始化数据库结构
+
+使用方法：
+    python database_files/run_init_schema.py
+
+功能：
+    - 自动连接MySQL数据库
+    - 执行 init_schema.sql 中的所有SQL语句
+    - 创建所有表、视图、索引和角色
+    - 创建默认管理员账户（admin/123456）
+    
+注意：
+    - 此脚本会创建全新的数据库结构
+    - 如果数据库已存在，会保留现有数据（使用 CREATE TABLE IF NOT EXISTS）
+    - qa_messages 表使用新结构（包含 user_id, user_message, ai_message, model, image_url 等字段）
 """
 
 import os
@@ -9,13 +23,17 @@ import sys
 import pymysql
 import re
 from pathlib import Path
+from dotenv import load_dotenv
 
-# MySQL连接配置
+# 加载环境变量
+load_dotenv(override=True)
+
+# 尝试从环境变量获取配置，如果没有则使用默认值
 MYSQL_CONFIG = {
-    'host': '127.0.0.1',
-    'port': 3306,
-    'user': 'root',
-    'password': 'M17382930994c@',
+    'host': os.getenv('MYSQL_HOST', '127.0.0.1'),
+    'port': int(os.getenv('MYSQL_PORT', '3306')),
+    'user': os.getenv('MYSQL_USER', 'root'),
+    'password': os.getenv('MYSQL_PASSWORD', 'M17382930994c@'),
     'charset': 'utf8mb4'
 }
 
@@ -164,37 +182,52 @@ def main():
     print("=" * 60)
     print(f"MySQL 主机: {MYSQL_CONFIG['host']}:{MYSQL_CONFIG['port']}")
     print(f"用户名: {MYSQL_CONFIG['user']}")
+    print(f"数据库: java_project")
     print(f"SQL文件: {SQL_FILE}")
     print("=" * 60)
     print()
     
-    # 连接数据库
+    # 连接数据库（不指定数据库，因为可能还不存在）
     try:
-        print("正在连接MySQL数据库...")
-        conn = pymysql.connect(**MYSQL_CONFIG)
-        print("✓ 数据库连接成功")
+        print("正在连接MySQL服务器...")
+        # 先连接到MySQL服务器（不指定数据库）
+        conn_config = MYSQL_CONFIG.copy()
+        if 'database' in conn_config:
+            del conn_config['database']
+        conn = pymysql.connect(**conn_config)
+        print("✓ MySQL服务器连接成功")
         print()
     except Exception as e:
-        print(f"✗ 数据库连接失败: {e}")
+        print(f"✗ MySQL服务器连接失败: {e}")
         print("\n请检查:")
         print("  1. MySQL服务是否正在运行")
-        print("  2. 用户名和密码是否正确")
+        print("  2. 用户名和密码是否正确（可在.env文件中配置）")
         print("  3. 主机地址和端口是否正确")
+        print(f"  4. 当前配置: host={MYSQL_CONFIG['host']}, port={MYSQL_CONFIG['port']}, user={MYSQL_CONFIG['user']}")
         return 1
     
     try:
-        # 执行SQL文件
+        # 执行SQL文件（SQL文件中会创建数据库）
         success = execute_sql_file(conn, SQL_FILE)
         
         if success:
-            print("\n✓ 数据库初始化/更新成功完成！")
+            print("\n" + "=" * 60)
+            print("✓ 数据库初始化成功完成！")
+            print("=" * 60)
+            print("\n默认管理员账户:")
+            print("  用户名: admin")
+            print("  密码: 123456")
+            print("\n请及时修改默认管理员密码！")
             return 0
         else:
-            print("\n⚠ 数据库初始化/更新完成，但存在一些错误")
+            print("\n⚠ 数据库初始化完成，但存在一些错误")
+            print("请检查上面的错误信息")
             return 1
             
     except Exception as e:
         print(f"\n✗ 发生未预期的错误: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
     finally:
         conn.close()

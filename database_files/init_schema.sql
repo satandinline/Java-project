@@ -1,8 +1,14 @@
 -- --------------------------------------------------
 -- init_schema.sql
 -- java_project的数据库初始化脚本
--- 一共七个表
+-- 包含所有表结构定义和初始化数据
 -- 数据库类型: MySQL
+-- 
+-- 使用说明：
+-- 1. 直接执行此脚本创建全新数据库
+-- 2. 或使用 Python 脚本：python database_files/run_init_schema.py
+-- 
+-- 注意：此脚本会创建全新数据库，如果数据库已存在，会保留现有数据
 -- --------------------------------------------------
 
 -- 创建数据库java_project，并切换到该数据库 
@@ -29,6 +35,10 @@ CREATE TABLE IF NOT EXISTS `users` (
   `username` VARCHAR(100) UNIQUE NOT NULL COMMENT '用户名',
   `password_hash` VARCHAR(255) NOT NULL COMMENT '加密后的密码',
   `role` ENUM('普通用户', '管理员') NOT NULL DEFAULT '普通用户' COMMENT '角色（普通用户或系统管理员）',
+  `nickname` VARCHAR(100) COMMENT '用户昵称',
+  `avatar_path` VARCHAR(255) DEFAULT '/default.jpg' COMMENT '头像路径（存储在public文件夹，格式：/用户名.jpg 或 /default.jpg）',
+  `security_question` VARCHAR(255) COMMENT '自定义安全问题（用于找回密码）',
+  `security_answer_hash` VARCHAR(255) COMMENT '安全问题的答案（哈希值）',
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '注册时间'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
 
@@ -155,13 +165,20 @@ CREATE TABLE IF NOT EXISTS `qa_sessions` (
 -- --------------------------------------------------
 CREATE TABLE IF NOT EXISTS `qa_messages` (
   `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
+  `user_id` BIGINT NOT NULL COMMENT '用户ID',
   `session_id` BIGINT NOT NULL COMMENT '会话ID',
-  `sender` ENUM('user', 'ai') NOT NULL COMMENT '发送方（用户或AI）',
-  `message_content` TEXT COMMENT '消息内容',
+  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `user_message` TEXT COMMENT '用户输入的信息',
+  `ai_message` TEXT COMMENT 'AI的回答',
   `user_feedback` TEXT COMMENT '用户反馈（如：评分或评论）',
   `timestamp` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '消息发送时间',
+  `model` ENUM('text', 'image') DEFAULT 'text' COMMENT '模型类型（text或image，参考qa_sessions表的mode字段）',
+  `image_url` VARCHAR(500) COMMENT '图片URL（文字类型AIGC为null，图片类型AIGC存储生成的图片地址）',
+  `image_from_users_url` VARCHAR(500) COMMENT '用户上传的图片URL（存储在image_from_users文件夹中）',
+  FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
   FOREIGN KEY (`session_id`) REFERENCES `qa_sessions`(`id`) ON DELETE CASCADE,
-  INDEX `idx_session` (`session_id`)
+  INDEX `idx_session` (`session_id`),
+  INDEX `idx_user` (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='问答消息表';
 
 
@@ -431,156 +448,16 @@ CREATE OR REPLACE VIEW v_AIGC_cultural_entities AS SELECT * FROM AIGC_cultural_e
 
 
 -- --------------------------------------------------
--- 数据迁移和字段更新
--- 用于更新现有数据库的字段类型和数据
+-- 创建默认管理员账户
 -- --------------------------------------------------
 
-
-
-
--- 1. 更新cultural_entities表的entity_type字段为ENUM类型
--- 首先将现有数据中不符合枚举值的类型改为"其他"
-UPDATE `cultural_entities` 
-SET `entity_type` = '其他' 
-WHERE `entity_type` NOT IN ('人物', '作品', '事件', '地点', '其他') 
-   OR `entity_type` IS NULL;
-
--- 修改字段类型为ENUM（如果字段已存在且类型不同）
-SET @column_type = (
-    SELECT DATA_TYPE 
-    FROM information_schema.COLUMNS 
-    WHERE TABLE_SCHEMA = 'java_project' 
-    AND TABLE_NAME = 'cultural_entities' 
-    AND COLUMN_NAME = 'entity_type'
-);
-
-SET @sql = IF(@column_type IS NOT NULL AND @column_type != 'enum',
-    'ALTER TABLE `cultural_entities` MODIFY COLUMN `entity_type` ENUM(\'人物\', \'作品\', \'事件\', \'地点\', \'其他\') DEFAULT \'其他\' COMMENT \'实体类型（人物、作品、事件、地点、其他）\'',
-    'SELECT "cultural_entities.entity_type字段类型已正确，跳过修改"'
-);
-
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- 2. 更新AIGC_cultural_entities表的entity_type字段为ENUM类型
--- 首先将现有数据中不符合枚举值的类型改为"其他"
-UPDATE `AIGC_cultural_entities` 
-SET `entity_type` = '其他' 
-WHERE `entity_type` NOT IN ('人物', '作品', '事件', '地点', '其他') 
-   OR `entity_type` IS NULL;
-
--- 修改字段类型为ENUM（如果字段已存在且类型不同）
-SET @column_type = (
-    SELECT DATA_TYPE 
-    FROM information_schema.COLUMNS 
-    WHERE TABLE_SCHEMA = 'java_project' 
-    AND TABLE_NAME = 'AIGC_cultural_entities' 
-    AND COLUMN_NAME = 'entity_type'
-);
-
-SET @sql = IF(@column_type IS NOT NULL AND @column_type != 'enum',
-    'ALTER TABLE `AIGC_cultural_entities` MODIFY COLUMN `entity_type` ENUM(\'人物\', \'作品\', \'事件\', \'地点\', \'其他\') DEFAULT \'其他\' COMMENT \'实体类型（人物、作品、事件、地点、其他）\'',
-    'SELECT "AIGC_cultural_entities.entity_type字段类型已正确，跳过修改"'
-);
-
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- 3. 更新annotation_tasks表以支持用户上传资源
--- 删除旧的外键约束（如果存在）
-SET @constraint_name = (
-    SELECT CONSTRAINT_NAME 
-    FROM information_schema.KEY_COLUMN_USAGE 
-    WHERE TABLE_SCHEMA = 'java_project' 
-    AND TABLE_NAME = 'annotation_tasks' 
-    AND COLUMN_NAME = 'resource_id' 
-    AND REFERENCED_TABLE_NAME = 'cultural_resources'
-    LIMIT 1
-);
-
-SET @sql = IF(@constraint_name IS NOT NULL, 
-    CONCAT('ALTER TABLE `annotation_tasks` DROP FOREIGN KEY `', @constraint_name, '`'),
-    'SELECT "外键约束不存在，跳过删除"'
-);
-
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- 添加resource_source字段（如果不存在）
-SET @column_exists = (
-    SELECT COUNT(*) 
-    FROM information_schema.COLUMNS 
-    WHERE TABLE_SCHEMA = 'java_project' 
-    AND TABLE_NAME = 'annotation_tasks' 
-    AND COLUMN_NAME = 'resource_source'
-);
-
-SET @sql = IF(@column_exists = 0,
-    'ALTER TABLE `annotation_tasks` ADD COLUMN `resource_source` ENUM(\'cultural_resources\', \'cultural_resources_from_user\') DEFAULT \'cultural_resources\' COMMENT \'资源来源表（cultural_resources或cultural_resources_from_user）\' AFTER `resource_id`',
-    'SELECT "resource_source字段已存在，跳过添加"'
-);
-
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- 添加resource_source索引（如果不存在）
-SET @index_exists = (
-    SELECT COUNT(*) 
-    FROM information_schema.STATISTICS 
-    WHERE TABLE_SCHEMA = 'java_project' 
-    AND TABLE_NAME = 'annotation_tasks' 
-    AND INDEX_NAME = 'idx_resource_source'
-);
-
-SET @sql = IF(@index_exists = 0,
-    'ALTER TABLE `annotation_tasks` ADD INDEX `idx_resource_source` (`resource_source`)',
-    'SELECT "idx_resource_source索引已存在，跳过添加"'
-);
-
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- 更新现有记录的resource_source（默认为cultural_resources）
-UPDATE `annotation_tasks` 
-SET `resource_source` = 'cultural_resources' 
-WHERE `resource_source` IS NULL OR `resource_source` = '';
-
-
-
-
--- --------------------------------------------------
--- 修复cultural_resources表的外键约束，允许删除用户时自动将upload_user_id设为NULL
--- --------------------------------------------------
-
--- 检查并删除旧的外键约束
-SET @constraint_name = (
-    SELECT CONSTRAINT_NAME 
-    FROM information_schema.KEY_COLUMN_USAGE 
-    WHERE TABLE_SCHEMA = 'java_project' 
-    AND TABLE_NAME = 'cultural_resources' 
-    AND CONSTRAINT_NAME = 'fk_cr_upload_user'
-    LIMIT 1
-);
-
-SET @sql = IF(@constraint_name IS NOT NULL, 
-    CONCAT('ALTER TABLE `cultural_resources` DROP FOREIGN KEY `', @constraint_name, '`'),
-    'SELECT "外键约束不存在，跳过删除"'
-);
-
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- 修改upload_user_id字段，允许NULL值
-ALTER TABLE `cultural_resources` 
-MODIFY COLUMN `upload_user_id` BIGINT COMMENT '上传用户ID（关联users表，用户删除后设为NULL）';
-
--- 重新创建外键约束，添加ON DELETE SET NULL
-ALTER TABLE `cultural_resources` 
-ADD CONSTRAINT `fk_cr_upload_user` 
-FOREIGN KEY (`upload_user_id`) REFERENCES `users`(`id`) ON DELETE SET NULL;
+-- 创建默认管理员账户（admin/123456）
+-- 密码123456的SHA256哈希值
+INSERT INTO `users` (`username`, `password_hash`, `role`, `nickname`, `avatar_path`) 
+VALUES (
+    'admin', 
+    '8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92', 
+    '管理员',
+    '管理员',
+    './default.jpg'
+) ON DUPLICATE KEY UPDATE `username` = `username`;

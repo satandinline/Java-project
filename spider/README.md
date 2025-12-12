@@ -14,6 +14,7 @@
 2. **自动存储到数据库**：爬取的图片信息自动存储到 `crawled_images` 表
 3. **图片下载**：自动下载图片到 `crawled_images` 文件夹
 4. **标签提取**：自动从页面内容中提取标签并存储
+5. **智能过滤**：自动过滤非文化相关的图片（如logo、图标、横幅、二维码等）
 
 ## 数据库表结构
 
@@ -41,7 +42,7 @@
 
 2. **`cultural_entities` 表**：
    - `entity_name`: 实体名称（文化资源的名称，通常是页面标题）
-   - `entity_type`: 实体类型
+   - `entity_type`: 实体类型（ENUM类型：'人物', '作品', '事件', '地点', '其他'）
    - `description`: 描述（页面主要内容）
    - `source`: 来源
 
@@ -81,11 +82,17 @@ pip install requests beautifulsoup4 pymysql pillow python-dotenv
 
 确保已执行 `database_files/init_schema.sql` 创建数据库表结构。
 
+**推荐方式：**
+```bash
+python database_files/run_init_schema.py
+```
+
 ## 使用方法
 
 ### 方法1：运行所有爬虫（推荐）
 
 ```bash
+# 在spider目录下运行
 python run_spiders.py
 ```
 
@@ -114,7 +121,7 @@ python wikipedia_spider.py
 - **爬取范围**：从起始URL开始，自动发现并爬取相关链接
 - **限制**：
   - 文字数据：最多200条
-  - 图片数据：最多200条
+  - 图片数据：最多20条
 - **数据存储**：
   - 文字数据：存储到 `cultural_resources` 和 `cultural_entities` 表
   - 图片数据：存储到 `crawled_images` 表和 `crawled_images` 文件夹
@@ -126,7 +133,7 @@ python wikipedia_spider.py
 - **爬取范围**：从"汉族传统节日"列表页面提取节日链接，逐个爬取
 - **限制**：
   - 文字数据：最多200条
-  - 图片数据：最多200条
+  - 图片数据：最多20条
 - **数据存储**：
   - 文字数据：存储到 `cultural_resources` 和 `cultural_entities` 表
   - 图片数据：存储到 `crawled_images` 表和 `crawled_images` 文件夹
@@ -153,9 +160,11 @@ python wikipedia_spider.py
 3. **请求频率**：爬虫已设置适当的延迟，避免请求过快被封禁
 4. **图片格式**：支持 jpg, jpeg, png, gif, webp 格式
 5. **错误处理**：爬虫会自动处理网络错误和数据库错误，继续运行
-6. **爬取限制**：每个网站的文字和图片数据各限制为200条，避免数据量过大
+6. **爬取限制**：每个网站的文字数据限制为200条，图片数据限制为20条，避免数据量过大
+7. **图片质量检测**：自动过滤空白、纯色、单调等无意义的图片，确保只保存有意义的图片
 7. **图片过滤**：爬虫会自动过滤掉非文化相关的图片（如logo、图标、横幅、二维码等），只保留与文化资源相关的图片
 8. **文字爬取**：爬虫会爬取所有相关页面，包括纯文字页面，确保获取完整的文化资源信息
+9. **内容提取**：爬虫会智能提取页面主要内容，过滤导航、注意事项等无关内容
 
 ## 故障排除
 
@@ -172,6 +181,10 @@ python wikipedia_spider.py
 ### 序号冲突
 - 爬虫会自动检查并处理序号冲突
 - 如果出现冲突，可以手动清理 `crawled_images` 文件夹
+
+### 内容提取不准确
+- 检查目标网站HTML结构是否变化
+- 可能需要更新选择器
 
 ## 开发说明
 

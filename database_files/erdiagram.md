@@ -79,11 +79,15 @@ erDiagram
     
     qa_messages {
         BIGINT id PK
+        BIGINT user_id FK
         BIGINT session_id FK
-        ENUM sender
-        TEXT message_content
+        DATETIME create_time
+        TEXT user_message
+        TEXT ai_message
         TEXT user_feedback
         TIMESTAMP timestamp
+        ENUM model
+        VARCHAR image_url
     }
     
     %% 标注相关表
@@ -223,6 +227,9 @@ erDiagram
 
 7. **qa_messages** - 问答消息表
    - 追踪多轮对话的具体内容并收集反馈
+   - 新表结构包含：user_id, user_message, ai_message, model, image_url 等字段
+   - model字段标识使用的模型类型（'text' 或 'image'）
+   - image_url字段仅在图片AIGC时存储生成的图片地址
 
 ### 标注相关表
 

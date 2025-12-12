@@ -10,26 +10,107 @@
 
     <div class="aigc-layout">
       <!-- 左侧：历史会话导航 -->
-      <div class="session-nav-panel">
+      <div class="session-nav-panel" :class="{ collapsed: isHistoryCollapsed }">
         <div class="session-nav-header">
           <h3>历史会话</h3>
-          <button class="new-chat-btn" @click="createNewSession" title="开启新对话">
-            <span>+</span>
+          <div class="header-actions">
+            <button 
+              class="toggle-history-btn" 
+              @click="toggleHistoryPanel"
+              :title="isHistoryCollapsed ? '显示历史记录' : '隐藏历史记录'"
+            >
+              <span v-if="isHistoryCollapsed">▶</span>
+              <span v-else>◀</span>
+            </button>
+            <button 
+              v-if="!isHistoryCollapsed"
+              class="new-chat-btn" 
+              @click="createNewSession" 
+              title="开启新对话"
+            >
+              <span>+</span>
+            </button>
+          </div>
+        </div>
+        <!-- 删除操作栏 -->
+        <div class="delete-actions" v-if="!isHistoryCollapsed && sessionHistory.length > 0">
+          <button 
+            class="delete-btn" 
+            @click="deleteSelectedSessions"
+            :disabled="selectedSessions.length === 0"
+            title="删除选中的会话"
+          >
+            删除选中 ({{ selectedSessions.length }})
+          </button>
+          <button 
+            class="delete-all-btn" 
+            @click="deleteAllSessions"
+            title="删除所有会话"
+          >
+            全部删除
           </button>
         </div>
-        <div class="session-list" ref="sessionListRef">
-          <div 
-            v-for="(session, index) in sessionHistory" 
-            :key="session.id"
-            :class="['session-item', { active: currentSessionId === session.id }]"
-            @click="loadSession(session.id)"
-          >
-            <div class="session-title">{{ session.title || `会话 ${index + 1}` }}</div>
-            <div class="session-time">{{ formatTime(session.created_at) }}</div>
-            <div class="session-preview">{{ getSessionPreview(session) }}</div>
+        <div class="session-list" ref="sessionListRef" v-show="!isHistoryCollapsed">
+          <!-- 文字AIGC历史记录 -->
+          <div class="history-section">
+            <div class="history-section-header" @click="textHistoryExpanded = !textHistoryExpanded">
+              <span>📝 文字AIGC历史记录</span>
+              <span class="expand-icon">{{ textHistoryExpanded ? '▼' : '▶' }}</span>
+            </div>
+            <div v-show="textHistoryExpanded" class="history-section-content">
+              <div 
+                v-for="(session, index) in textSessions" 
+                :key="session.id"
+                :class="['session-item', { active: currentSessionId === session.id, selected: selectedSessions.includes(session.id) }]"
+                @click="handleSessionClick(session.id, $event)"
+              >
+                <input 
+                  type="checkbox" 
+                  class="session-checkbox"
+                  :checked="selectedSessions.includes(session.id)"
+                  @click.stop="toggleSessionSelection(session.id)"
+                />
+                <div class="session-content" @click="loadSession(session.id)">
+                  <div class="session-title">{{ session.title || `会话 ${index + 1}` }}</div>
+                  <div class="session-time">{{ formatTime(session.created_at) }}</div>
+                  <div class="session-preview">{{ getSessionPreview(session) }}</div>
+                </div>
+              </div>
+              <div v-if="textSessions.length === 0" class="empty-sessions">
+                暂无文字AIGC历史记录
+              </div>
+            </div>
           </div>
-          <div v-if="sessionHistory.length === 0" class="empty-sessions">
-            暂无历史会话
+          
+          <!-- 图片AIGC历史记录 -->
+          <div class="history-section">
+            <div class="history-section-header" @click="imageHistoryExpanded = !imageHistoryExpanded">
+              <span>🎨 图片AIGC历史记录</span>
+              <span class="expand-icon">{{ imageHistoryExpanded ? '▼' : '▶' }}</span>
+            </div>
+            <div v-show="imageHistoryExpanded" class="history-section-content">
+              <div 
+                v-for="(session, index) in imageSessions" 
+                :key="session.id"
+                :class="['session-item', { active: currentSessionId === session.id, selected: selectedSessions.includes(session.id) }]"
+                @click="handleSessionClick(session.id, $event)"
+              >
+                <input 
+                  type="checkbox" 
+                  class="session-checkbox"
+                  :checked="selectedSessions.includes(session.id)"
+                  @click.stop="toggleSessionSelection(session.id)"
+                />
+                <div class="session-content" @click="loadSession(session.id)">
+                  <div class="session-title">{{ session.title || `会话 ${index + 1}` }}</div>
+                  <div class="session-time">{{ formatTime(session.created_at) }}</div>
+                  <div class="session-preview">{{ getSessionPreview(session) }}</div>
+                </div>
+              </div>
+              <div v-if="imageSessions.length === 0" class="empty-sessions">
+                暂无图片AIGC历史记录
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -44,11 +125,18 @@
             :class="['message-item', msg.role]"
           >
             <div class="message-avatar">
-              <span v-if="msg.role === 'user'">👤</span>
+              <img 
+                v-if="msg.role === 'user' && currentUserAvatar" 
+                :src="getAvatarUrl(currentUserAvatar)" 
+                class="avatar-img"
+                alt="用户头像"
+                @error="handleAvatarError"
+              />
+              <span v-else-if="msg.role === 'user'">👤</span>
               <span v-else>🤖</span>
             </div>
             <div class="message-content-wrapper">
-              <div class="message-role-label">{{ msg.role === 'user' ? '用户' : 'AI' }}</div>
+              <div class="message-role-label">{{ msg.role === 'user' ? (currentUserNickname || '用户') : (msg.model === 'image' ? 'Huoshan' : 'Tongyi') }}</div>
               <!-- AI回答时显示左右分栏 -->
               <div v-if="msg.role === 'assistant' && msg.retrieved_resources" class="ai-response-layout">
                 <!-- 左侧：检索到的资源 -->
@@ -109,7 +197,7 @@
                   <div class="answer-content">
                     <div class="message-text" v-html="formatAnswerText(msg.content)"></div>
                     <div v-if="msg.image_path" class="message-image-result">
-                      <img :src="msg.image_path" class="result-image" @click="previewImage(msg.image_path)" />
+                      <img :src="getImageUrl(msg.image_path)" class="result-image" @click="previewImage(getImageUrl(msg.image_path))" />
                     </div>
                     <div v-if="msg.key_entities && msg.key_entities.length > 0" class="key-entities">
                       <div class="entities-label">关键实体：</div>
@@ -135,9 +223,10 @@
                     @click="previewImage(img)"
                   />
                 </div>
-                <div class="message-text" v-html="formatAnswerText(msg.content)"></div>
+                <div v-if="msg.role === 'user' && msg.content" class="message-text" v-html="formatAnswerText(msg.content)"></div>
+                <div v-else-if="msg.role === 'assistant'" class="message-text" v-html="formatAnswerText(msg.content)"></div>
                 <div v-if="msg.image_path" class="message-image-result">
-                  <img :src="msg.image_path" class="result-image" @click="previewImage(msg.image_path)" />
+                  <img :src="getImageUrl(msg.image_path)" class="result-image" @click="previewImage(getImageUrl(msg.image_path))" />
                 </div>
               </div>
               <div class="message-time">{{ formatTime(msg.timestamp) }}</div>
@@ -167,7 +256,7 @@
                 🎨 图片AIGC
               </button>
             </div>
-            <label class="upload-btn" v-if="aigcMode === 'image'">
+            <label class="upload-btn">
               <input 
                 type="file" 
                 accept="image/*" 
@@ -238,10 +327,56 @@ const getCurrentUser = () => {
   return null;
 };
 
+// 获取用户昵称和头像
+const currentUserInfo = computed(() => getCurrentUser());
+const currentUserNickname = computed(() => currentUserInfo.value?.nickname || currentUserInfo.value?.username || '用户');
+const currentUserAvatar = computed(() => currentUserInfo.value?.avatar_path || './default.jpg');
+
+// 获取头像URL
+const getAvatarUrl = (avatarPath) => {
+  if (!avatarPath) return '/default.jpg';
+  if (avatarPath.startsWith('http://') || avatarPath.startsWith('https://')) {
+    return avatarPath;
+  }
+  if (avatarPath.startsWith('/')) {
+    return avatarPath;
+  }
+  if (avatarPath.startsWith('./')) {
+    return avatarPath.replace('./', '/');
+  }
+  return '/' + avatarPath;
+};
+
+// 处理头像加载错误
+const handleAvatarError = (event) => {
+  event.target.src = '/default.jpg';
+};
+
 // 会话管理
 const sessionHistory = ref([]);
 const currentSessionId = ref(null);
 const currentConversation = ref([]);
+const selectedSessions = ref([]); // 选中的会话ID列表
+const isHistoryCollapsed = ref(false); // 历史记录面板是否折叠
+const textHistoryExpanded = ref(true); // 文字AIGC历史记录是否展开
+const imageHistoryExpanded = ref(true); // 图片AIGC历史记录是否展开
+
+// 计算属性：按模式分类会话
+const textSessions = computed(() => {
+  // 确保mode字段正确：如果mode是'image'，不应该出现在textSessions中
+  return sessionHistory.value.filter(s => {
+    const mode = s.mode || 'text';
+    return mode === 'text';
+  });
+});
+
+const imageSessions = computed(() => {
+  // 确保mode字段正确：如果mode是'text'，不应该出现在imageSessions中
+  return sessionHistory.value.filter(s => {
+    const mode = s.mode || 'text';
+    return mode === 'image';
+  });
+});
 
 // 输入相关
 const userInput = ref('');
@@ -379,7 +514,8 @@ const createNewSession = async () => {
         'X-User-Id': currentUser.id.toString()
       },
       body: JSON.stringify({
-        summary: '新对话'
+        summary: '新对话',
+        mode: aigcMode.value  // 传递当前模式
       })
     });
     
@@ -389,6 +525,7 @@ const createNewSession = async () => {
         id: data.session.id,
         title: data.session.summary || '新对话',
         created_at: data.session.created_at,
+        mode: data.session.mode || aigcMode.value,  // 保存模式
         messages: []
       };
       sessionHistory.value.unshift(newSession);
@@ -415,6 +552,13 @@ const loadSession = async (sessionId) => {
     return;
   }
   
+  // 检查会话模式是否与当前模式匹配
+  const session = sessionHistory.value.find(s => s.id === sessionId);
+  if (session && session.mode && session.mode !== aigcMode.value) {
+    // 如果模式不匹配，切换模式
+    aigcMode.value = session.mode;
+  }
+  
   try {
     const response = await fetch(`/api/aigc/sessions/${sessionId}/messages?user_id=${currentUser.id}`, {
       method: 'GET',
@@ -426,16 +570,25 @@ const loadSession = async (sessionId) => {
     const data = await response.json();
     if (data.success && data.messages) {
       currentSessionId.value = sessionId;
-      // 转换消息格式以匹配前端显示
-      currentConversation.value = data.messages.map(msg => ({
-        role: msg.role === 'user' ? 'user' : 'assistant',
-        content: msg.content,
-        timestamp: msg.timestamp,
-        retrieved_resources: msg.retrieved_resources,
-        key_entities: msg.key_entities || [],
-        sources: msg.sources || '',
-        image_path: msg.image_path
-      }));
+      // 转换消息格式以匹配前端显示（使用新表结构）
+      currentConversation.value = data.messages.map(msg => {
+        const message = {
+          role: msg.role === 'user' ? 'user' : 'assistant',
+          content: msg.content || '',
+          timestamp: msg.timestamp,
+          retrieved_resources: msg.retrieved_resources || null,
+          key_entities: msg.key_entities || [],
+          sources: msg.sources || '',
+          image_path: msg.image_path || null,
+          images: msg.images || [],
+          model: msg.model || (session.mode || 'text')  // 添加模型类型
+        };
+        // 确保用户消息有内容显示
+        if (message.role === 'user' && !message.content) {
+          message.content = '[用户消息]';
+        }
+        return message;
+      });
       // 滚动到底部
       await nextTick();
       scrollToBottom();
@@ -555,8 +708,25 @@ const sendMessage = async () => {
     return;
   }
 
-  // 如果没有当前会话，创建新会话
-  if (!currentSessionId.value) {
+  // 检查当前会话的模式是否与当前模式匹配
+  if (currentSessionId.value) {
+    const currentSession = sessionHistory.value.find(s => s.id === currentSessionId.value);
+    if (currentSession && currentSession.mode && currentSession.mode !== aigcMode.value) {
+      // 如果模式不匹配，提示用户并创建新会话
+      if (!confirm(`当前会话是${currentSession.mode === 'text' ? '文字' : '图片'}AIGC模式，您正在使用${aigcMode.value === 'text' ? '文字' : '图片'}AIGC模式。是否创建新会话？`)) {
+        return;
+      }
+      // 保存当前会话
+      await saveCurrentSession();
+      // 创建新会话
+      const newSession = await createNewSession();
+      if (!newSession) {
+        alert('创建会话失败，请稍后重试');
+        return;
+      }
+    }
+  } else {
+    // 如果没有当前会话，创建新会话
     const newSession = await createNewSession();
     if (!newSession) {
       alert('创建会话失败，请稍后重试');
@@ -574,24 +744,7 @@ const sendMessage = async () => {
 
   currentConversation.value.push(userMessage);
   
-  // 保存用户消息到数据库
-  if (currentSessionId.value) {
-    try {
-      await fetch(`/api/aigc/sessions/${currentSessionId.value}/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User-Id': currentUser.id.toString()
-        },
-        body: JSON.stringify({
-          sender: 'user',
-          content: userMessage.content
-        })
-      });
-    } catch (error) {
-      console.error('保存用户消息失败:', error);
-    }
-  }
+  // 注意：用户消息和AI消息将一起保存，所以这里先不保存
   
   // inputText已在上面声明，这里直接使用
   userInput.value = '';
@@ -606,6 +759,7 @@ const sendMessage = async () => {
     key_entities: [],
     sources: '',
     image_path: null,
+    model: aigcMode.value,  // 设置模型类型，用于显示AI昵称
     timestamp: new Date().toISOString()
   };
   currentConversation.value.push(aiMessage);
@@ -621,11 +775,16 @@ const sendMessage = async () => {
       throw new Error('用户未登录，请先登录');
     }
 
-    // 调用后端API（流式模式）
+    // 调用后端API（普通模式，不使用流式输出）
     const formData = new FormData();
     formData.append('query', inputText);
     formData.append('mode', aigcMode.value);
-    formData.append('stream', 'true');  // 启用流式输出
+    formData.append('stream', 'false');  // 禁用流式输出
+    
+    // 添加session_id（如果存在）
+    if (currentSessionId.value) {
+      formData.append('session_id', currentSessionId.value.toString());
+    }
     
     if (aigcMode.value === 'image' && userMessage.images.length > 0) {
       userMessage.images.forEach((img, idx) => {
@@ -673,65 +832,40 @@ const sendMessage = async () => {
       throw new Error(errorMessage);
     }
 
-    // 处理流式响应
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';  // 保留最后一个不完整的行
-
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            
-            if (data.type === 'resources') {
-              // 收到检索资源信息
-              aiMessage.retrieved_resources = data.data;
-            } else if (data.type === 'chunk') {
-              // 收到文本块，追加到内容
-              aiMessage.content += data.data;
-              // 实时滚动到底部
-              await nextTick();
-              scrollToBottom();
-            } else if (data.type === 'done') {
-              // 收到完整结果
-              const finalData = data.data;
-              aiMessage.content = finalData.answer || aiMessage.content;
-              aiMessage.key_entities = finalData.key_entities || [];
-              aiMessage.sources = finalData.sources || '';
-              aiMessage.retrieved_resources = finalData.retrieved_resources || aiMessage.retrieved_resources;
-              
-              // 保存AI消息到数据库
-              if (currentSessionId.value) {
-                try {
-                  await fetch(`/api/aigc/sessions/${currentSessionId.value}/messages`, {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'X-User-Id': currentUser.id.toString()
-                    },
-                    body: JSON.stringify({
-                      sender: 'ai',
-                      content: aiMessage.content
-                    })
-                  });
-                } catch (error) {
-                  console.error('保存AI消息失败:', error);
-                }
-              }
-            }
-          } catch (e) {
-            console.error('解析流式数据失败:', e, line);
-          }
+    // 处理JSON响应（非流式）
+    try {
+      const data = await response.json();
+      
+      if (data.error) {
+        aiMessage.content = data.answer || data.error || '处理失败';
+      } else {
+        aiMessage.content = data.answer || '处理成功';
+        
+        // 处理图片路径（图片AIGC模式）
+        if (data.image_path) {
+          aiMessage.image_path = data.image_path;
+        }
+        
+        // 设置模型类型（用于显示AI昵称）
+        // 优先使用后端返回的model，如果没有则使用当前模式
+        aiMessage.model = data.model || aigcMode.value;  // 'text' 或 'image'
+        
+        // 处理其他字段
+        if (data.key_entities) {
+          aiMessage.key_entities = data.key_entities;
+        }
+        if (data.sources) {
+          aiMessage.sources = data.sources;
+        }
+        if (data.retrieved_resources) {
+          aiMessage.retrieved_resources = data.retrieved_resources;
         }
       }
+      
+      // 注意：消息已在后端AIGC chat接口中自动保存，这里不需要再次保存
+    } catch (e) {
+      console.error('解析JSON响应失败:', e);
+      aiMessage.content = '解析响应失败，请稍后重试';
     }
 
     // 确保内容不为空
@@ -825,6 +959,64 @@ const getResourceImageUrl = (storagePath, tableName) => {
   return folder + storagePath.replace(/^\/+/, '');
 };
 
+// 获取图片URL（用于AIGC生成的图片和用户上传的图片）
+// 参考头像显示方法：如果以 / 开头，直接返回（已经是正确的路径格式）
+const getImageUrl = (imagePath) => {
+  if (!imagePath) return '';
+  
+  // 如果已经是完整URL，直接返回
+  if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
+    return imagePath;
+  }
+  
+  // 处理绝对路径（Windows路径，如：D:\git\mygit\Java-project\AIGC_graph\0001.jpeg）
+  // 或包含绝对路径的相对路径（如：/AIGC_graph/D:\git\mygit\Java-project\AIGC_graph\0001.jpeg）
+  if (imagePath.includes(':\\') || imagePath.includes(':/')) {
+    // 提取文件名
+    const parts = imagePath.split(/[/\\]/);
+    const filename = parts[parts.length - 1];
+    // 如果文件名存在，根据路径判断是AIGC_graph还是image_from_users
+    if (filename) {
+      if (imagePath.includes('AIGC_graph')) {
+        return `/AIGC_graph/${filename}`;
+      } else if (imagePath.includes('image_from_users')) {
+        return `/image_from_users/${filename}`;
+      } else {
+        return `/AIGC_graph/${filename}`;  // 默认
+      }
+    }
+  }
+  
+  // 如果以 / 开头，直接返回（已经是正确的路径格式，参考头像显示方法）
+  if (imagePath.startsWith('/')) {
+    // 如果路径中包含Windows绝对路径特征，提取文件名
+    if (imagePath.includes(':\\') || imagePath.includes(':/')) {
+      const parts = imagePath.split(/[/\\]/);
+      const filename = parts[parts.length - 1];
+      if (filename) {
+        // 根据路径判断文件夹
+        if (imagePath.includes('AIGC_graph')) {
+          return `/AIGC_graph/${filename}`;
+        } else if (imagePath.includes('image_from_users')) {
+          return `/image_from_users/${filename}`;
+        } else {
+          return `/AIGC_graph/${filename}`;  // 默认
+        }
+      }
+    }
+    // 否则直接返回（已经是正确的相对路径格式，如：/AIGC_graph/0001.jpeg 或 /image_from_users/xxx.jpg）
+    return imagePath;
+  }
+  
+  // 如果以 ./ 开头，转换为 / 开头
+  if (imagePath.startsWith('./')) {
+    return imagePath.replace('./', '/');
+  }
+  
+  // 其他情况，添加 / 前缀
+  return '/' + imagePath;
+};
+
 // 从数据库加载会话列表
 const loadSessionsFromDB = async () => {
   const currentUser = getCurrentUser();
@@ -846,8 +1038,11 @@ const loadSessionsFromDB = async () => {
         id: session.id,
         title: session.summary || '新对话',
         created_at: session.created_at,
+        mode: session.mode || 'text',  // 保存模式，确保从数据库正确读取
         message_count: session.message_count || 0
       }));
+      // 调试：打印会话模式
+      console.log('加载的会话列表:', sessionHistory.value.map(s => ({ id: s.id, mode: s.mode })));
     } else {
       console.error('加载会话列表失败:', data.message);
       sessionHistory.value = [];
@@ -858,7 +1053,135 @@ const loadSessionsFromDB = async () => {
   }
 };
 
+// 切换历史记录面板显示/隐藏
+const toggleHistoryPanel = () => {
+  isHistoryCollapsed.value = !isHistoryCollapsed.value;
+  // 保存状态到本地存储
+  localStorage.setItem('aigc_history_collapsed', isHistoryCollapsed.value.toString());
+};
+
+// 处理会话点击（区分复选框和内容区域）
+const handleSessionClick = (sessionId, event) => {
+  // 如果点击的是复选框区域，不加载会话
+  if (event.target.classList.contains('session-checkbox') || event.target.closest('.session-checkbox')) {
+    return;
+  }
+  loadSession(sessionId);
+};
+
+// 切换会话选择状态
+const toggleSessionSelection = (sessionId) => {
+  const index = selectedSessions.value.indexOf(sessionId);
+  if (index > -1) {
+    selectedSessions.value.splice(index, 1);
+  } else {
+    selectedSessions.value.push(sessionId);
+  }
+};
+
+// 删除选中的会话
+const deleteSelectedSessions = async () => {
+  if (selectedSessions.value.length === 0) {
+    return;
+  }
+  
+  if (!confirm(`确定要删除选中的 ${selectedSessions.value.length} 个会话吗？此操作不可恢复。`)) {
+    return;
+  }
+  
+  const currentUser = getCurrentUser();
+  if (!currentUser || !currentUser.id) {
+    alert('请先登录');
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/aigc/sessions/batch', {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': currentUser.id.toString()
+      },
+      body: JSON.stringify({
+        session_ids: selectedSessions.value
+      })
+    });
+    
+    const data = await response.json();
+    if (data.success) {
+      // 如果当前会话被删除，清空对话
+      if (selectedSessions.value.includes(currentSessionId.value)) {
+        currentSessionId.value = null;
+        currentConversation.value = [];
+      }
+      
+      // 从列表中移除已删除的会话
+      sessionHistory.value = sessionHistory.value.filter(
+        s => !selectedSessions.value.includes(s.id)
+      );
+      
+      // 清空选中列表
+      selectedSessions.value = [];
+      
+      alert('删除成功');
+    } else {
+      alert('删除失败：' + (data.message || '未知错误'));
+    }
+  } catch (error) {
+    console.error('删除会话失败:', error);
+    alert('删除失败，请稍后重试');
+  }
+};
+
+// 删除所有会话
+const deleteAllSessions = async () => {
+  if (sessionHistory.value.length === 0) {
+    return;
+  }
+  
+  if (!confirm(`确定要删除所有 ${sessionHistory.value.length} 个会话吗？此操作不可恢复。`)) {
+    return;
+  }
+  
+  const currentUser = getCurrentUser();
+  if (!currentUser || !currentUser.id) {
+    alert('请先登录');
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/aigc/sessions/all', {
+      method: 'DELETE',
+      headers: {
+        'X-User-Id': currentUser.id.toString()
+      }
+    });
+    
+    const data = await response.json();
+    if (data.success) {
+      // 清空当前会话和对话
+      currentSessionId.value = null;
+      currentConversation.value = [];
+      sessionHistory.value = [];
+      selectedSessions.value = [];
+      
+      alert('删除成功');
+    } else {
+      alert('删除失败：' + (data.message || '未知错误'));
+    }
+  } catch (error) {
+    console.error('删除所有会话失败:', error);
+    alert('删除失败，请稍后重试');
+  }
+};
+
 onMounted(async () => {
+  // 从本地存储恢复历史记录面板状态
+  const savedCollapsedState = localStorage.getItem('aigc_history_collapsed');
+  if (savedCollapsedState !== null) {
+    isHistoryCollapsed.value = savedCollapsedState === 'true';
+  }
+  
   // 从数据库加载历史会话
   await loadSessionsFromDB();
   
@@ -944,6 +1267,22 @@ onMounted(async () => {
   border-right: 1px solid #eee;
   display: flex;
   flex-direction: column;
+  transition: width 0.3s ease;
+}
+
+.session-nav-panel.collapsed {
+  width: 50px;
+}
+
+.session-nav-panel.collapsed .session-nav-header h3,
+.session-nav-panel.collapsed .delete-actions,
+.session-nav-panel.collapsed .session-list {
+  display: none;
+}
+
+.session-nav-panel.collapsed .header-actions {
+  justify-content: center;
+  width: 100%;
 }
 
 .session-nav-header {
@@ -952,6 +1291,34 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.toggle-history-btn {
+  width: 28px;
+  height: 28px;
+  background: #f0f2f5;
+  color: #666;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s;
+  padding: 0;
+}
+
+.toggle-history-btn:hover {
+  background: #e4e7ed;
+  color: #409eff;
 }
 
 .session-nav-header h3 {
@@ -993,6 +1360,9 @@ onMounted(async () => {
 }
 
 .session-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   padding: 12px;
   margin-bottom: 8px;
   border-radius: 6px;
@@ -1038,8 +1408,95 @@ onMounted(async () => {
 .empty-sessions {
   text-align: center;
   color: #999;
-  padding: 40px 20px;
+  padding: 20px;
   font-size: 13px;
+}
+
+.history-section {
+  margin-bottom: 16px;
+}
+
+.history-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+  transition: background 0.3s;
+}
+
+.history-section-header:hover {
+  background: #e4e7ed;
+}
+
+.expand-icon {
+  font-size: 12px;
+  color: #666;
+}
+
+.history-section-content {
+  margin-top: 8px;
+}
+
+/* 删除操作栏 */
+.delete-actions {
+  padding: 10px;
+  border-bottom: 1px solid #eee;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.delete-btn,
+.delete-all-btn {
+  flex: 1;
+  padding: 6px 12px;
+  background: #f56c6c;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.3s;
+  min-width: 80px;
+}
+
+.delete-btn:hover:not(:disabled) {
+  background: #f78989;
+}
+
+.delete-btn:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.delete-all-btn {
+  background: #e6a23c;
+}
+
+.delete-all-btn:hover {
+  background: #ebb563;
+}
+
+.session-item.selected {
+  background: #fff3e0;
+  border-color: #ff9800;
+}
+
+.session-checkbox {
+  margin-top: 2px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.session-content {
+  flex: 1;
+  min-width: 0;
 }
 
 /* 右侧主面板 */
@@ -1083,6 +1540,13 @@ onMounted(async () => {
   justify-content: center;
   font-size: 18px;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .message-item.user .message-avatar {

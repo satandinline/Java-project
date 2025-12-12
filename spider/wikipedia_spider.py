@@ -46,8 +46,8 @@ class WikipediaSpider:
         self.current_image_index = 0
         
         # 数量限制
-        self.max_text_items = 200  # 最大文字数据条数
-        self.max_image_items = 200  # 最大图片数据条数
+        self.max_text_items = 20  # 最大文字数据条数
+        self.max_image_items = 20  # 最大图片数据条数
         self.text_items_count = 0  # 已爬取的文字数据条数
         self.image_items_count = 0  # 已爬取的图片数据条数
         
@@ -150,6 +150,74 @@ class WikipediaSpider:
         
         return f"{self.current_image_index}{ext}"
     
+    def _is_meaningful_image(self, image_path):
+        """
+        检测图片是否有意义（不是空白或纯色图片）
+        返回True表示图片有意义，False表示应该过滤掉
+        """
+        try:
+            with Image.open(image_path) as img:
+                # 转换为RGB模式（如果是RGBA或其他模式）
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                # 获取图片尺寸
+                width, height = img.size
+                
+                # 过滤掉太小的图片（小于100x100）
+                if width < 100 or height < 100:
+                    return False
+                
+                # 将图片转换为numpy数组进行分析
+                import numpy as np
+                img_array = np.array(img)
+                
+                # 计算图片的亮度（灰度值）
+                # 使用标准公式：0.299*R + 0.587*G + 0.114*B
+                gray = np.dot(img_array[...,:3], [0.299, 0.587, 0.114])
+                
+                # 计算亮度的均值和标准差
+                mean_brightness = np.mean(gray)
+                std_brightness = np.std(gray)
+                
+                # 如果图片几乎全是白色（亮度均值>240且标准差很小），可能是空白图片
+                if mean_brightness > 240 and std_brightness < 10:
+                    print(f"  过滤空白图片（亮度: {mean_brightness:.1f}, 标准差: {std_brightness:.1f}）")
+                    return False
+                
+                # 如果图片几乎全是黑色（亮度均值<15且标准差很小），可能是无效图片
+                if mean_brightness < 15 and std_brightness < 10:
+                    print(f"  过滤纯黑图片（亮度: {mean_brightness:.1f}, 标准差: {std_brightness:.1f}）")
+                    return False
+                
+                # 如果标准差太小（<5），说明图片内容单调，可能是纯色或渐变背景
+                if std_brightness < 5:
+                    print(f"  过滤单调图片（标准差: {std_brightness:.1f}）")
+                    return False
+                
+                # 计算图片的方差（用于检测是否有足够的内容变化）
+                variance = np.var(gray)
+                if variance < 100:  # 方差太小，说明图片内容变化很小
+                    print(f"  过滤低方差图片（方差: {variance:.1f}）")
+                    return False
+                
+                # 检查图片是否有足够的颜色变化
+                # 计算RGB三个通道的标准差
+                r_std = np.std(img_array[:, :, 0])
+                g_std = np.std(img_array[:, :, 1])
+                b_std = np.std(img_array[:, :, 2])
+                
+                # 如果三个通道的标准差都很小，说明图片颜色单调
+                if r_std < 5 and g_std < 5 and b_std < 5:
+                    print(f"  过滤颜色单调图片（RGB标准差: {r_std:.1f}, {g_std:.1f}, {b_std:.1f}）")
+                    return False
+                
+                return True
+        except Exception as e:
+            print(f"  图片质量检测失败: {e}")
+            # 如果检测失败，默认保留图片（避免误删）
+            return True
+    
     def _download_image(self, image_url, file_name):
         """下载图片并保存"""
         try:
@@ -170,6 +238,16 @@ class WikipediaSpider:
             with open(file_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
+            
+            # 检测图片是否有意义
+            if not self._is_meaningful_image(file_path):
+                # 如果图片无意义，删除文件并返回None
+                try:
+                    os.remove(file_path)
+                    print(f"  已删除无意义图片: {file_name}")
+                except:
+                    pass
+                return None, None
             
             # 获取图片尺寸
             try:
@@ -540,16 +618,16 @@ class WikipediaSpider:
                     
                     if file_path:
                         # 提取标签
-                        tags = self._extract_tags(html_content, url, title)
+                        tags = self._extract_tags(html_content, url, resource_title)
                         if img_info.get('alt'):
                             tags.append(img_info['alt'])
-                        if title:
-                            tags.append(title)
+                        if resource_title:
+                            tags.append(resource_title)
                         
                         # 保存到数据库
                         storage_path = f"crawled_images/{file_name}"
                         if self._save_to_database(file_name, storage_path, dimensions, tags):
-                            print(f"已保存图片: {file_name} (序号: {self.current_image_index}, 标题: {title}, 图片数据: {self.image_items_count}/{self.max_image_items})")
+                            print(f"已保存图片: {file_name} (序号: {self.current_image_index}, 标题: {resource_title}, 图片数据: {self.image_items_count}/{self.max_image_items})")
                             return True
             
             return False

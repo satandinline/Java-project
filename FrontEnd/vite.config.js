@@ -27,6 +27,26 @@ export default defineConfig({
             console.log('proxy error', err);
           });
         },
+      },
+      '/avatars': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/default.jpg': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/AIGC_graph': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/image_from_users': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+        secure: false,
       }
     }
   }
