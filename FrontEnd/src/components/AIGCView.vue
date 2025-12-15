@@ -881,7 +881,7 @@ const sendMessage = async () => {
     
     // 提供更友好的错误提示
     if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError')) {
-      errorContent += '\n\n请确保：\n1. 后端API服务器已启动（运行 python aigc_api_server.py）\n2. 服务器运行在 http://localhost:5000\n3. 检查网络连接';
+      errorContent += '\n\n请确保：\n1. 后端API服务器已启动（运行 python aigc_api_server.py）\n2. 后端服务正常运行（查看终端输出）\n3. 检查网络连接';
     } else if (errorMessage.includes('未初始化') || errorMessage.includes('未配置')) {
       errorContent += '\n\n请检查：\n1. API密钥是否正确配置在.env文件中\n2. 数据库连接是否正常';
     }

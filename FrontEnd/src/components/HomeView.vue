@@ -34,28 +34,17 @@
           placeholder="请输入检索词 (例如：寒食节)..." 
         />
         
-        <!-- 2. 绑定点击事件，处理加载状态 -->
-        <button class="ai-search-btn" @click="handleSearch" :disabled="isSearching">
-          {{ isSearching ? '检索中...' : '全文检索' }}
+        <!-- 2. 绑定点击事件，跳转到搜索页面 -->
+        <button class="ai-search-btn" @click="handleSearch">
+          全文检索
         </button>
       </div>
 
-      <!-- 3. 新增：如果是搜索模式，显示一个返回按钮 -->
-      <div v-if="isSearchMode" style="margin-left: 15px;">
-        <button class="reset-btn" @click="resetToDefault">
-          ✕ 返回全部列表
-        </button>
-      </div>
     </div>
     <!-- ==================== 修改结束：搜索栏 ==================== -->
 
     <!-- 底部资源卡片 -->
     <div class="resources-section">
-      <!-- 搜索结果为空的提示 -->
-      <div v-if="isSearchMode && resourceList.length === 0" style="text-align: center; color: #999; margin-bottom: 30px;">
-        未找到与“{{ searchQuery }}”相关的内容
-      </div>
-
       <div class="resource-grid">
         <div class="resource-item" v-for="item in resourceList" :key="item.id">
           <div class="res-img-container">
@@ -71,21 +60,14 @@
             </div>
           </div>
           <div class="res-info">
-            <!-- 搜索结果的 title 会映射到 entity_name -->
             <h3 class="res-entity-name">{{ item.entity_name }}</h3>
-            <!-- 搜索结果的 snippet 会映射到 description -->
             <p class="res-description">{{ item.description }}</p>
-            
-            <!-- 如果是搜索结果，显示来源链接 -->
-            <a v-if="item.source_url && isSearchMode" :href="item.source_url" target="_blank" style="font-size: 12px; color: #409eff; margin-top: 10px; display: block;">
-              查看来源 &rarr;
-            </a>
           </div>
         </div>
       </div>
       
-      <!-- ==================== 修改：分页控件 (仅在非搜索模式下显示) ==================== -->
-      <div class="pagination" v-if="!isSearchMode && resourceList.length > 0">
+      <!-- ==================== 分页控件 ==================== -->
+      <div class="pagination" v-if="resourceList.length > 0">
         <button class="page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">上一页</button>
         <div class="page-numbers">
           <template v-for="pageNum in visiblePages" :key="pageNum">
@@ -108,6 +90,9 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
+
+const router = useRouter();
 
 // --- 轮播图数据 (保持不变) ---
 const mediaList = [
@@ -141,79 +126,67 @@ const isLoading = ref(false);
 
 // ==================== 新增：搜索相关状态 ====================
 const searchQuery = ref('');      // 搜索关键词
-const isSearching = ref(false);   // 是否正在请求搜索接口
-const isSearchMode = ref(false);  // 是否处于“搜索结果展示模式”
 
-// 1. 获取默认资源列表 (保持原有逻辑，但增加重置搜索模式)
+// 1. 获取默认资源列表
 const fetchResources = async (page = 1) => {
   if (isLoading.value) return;
   isLoading.value = true;
   
   try {
     const response = await fetch(`/api/home/resources?page=${page}&page_size=8`);
+    
+    // 检查响应状态
+    if (!response.ok) {
+      throw new Error(`HTTP错误! 状态: ${response.status}`);
+    }
+    
     const data = await response.json();
     
     if (data.success) {
-      resourceList.value = data.resources;
-      currentPage.value = data.pagination.page;
-      totalPages.value = data.pagination.total_pages;
+      resourceList.value = data.resources || [];
+      currentPage.value = data.pagination?.page || 1;
+      totalPages.value = data.pagination?.total_pages || 1;
       jumpPage.value = currentPage.value;
       
-      // 确保退出搜索模式
-      isSearchMode.value = false;
+      // 如果资源列表为空，输出提示
+      if (resourceList.value.length === 0) {
+        console.warn('资源列表为空，可能是数据库中没有数据');
+      }
     } else {
-      console.error('获取资源失败:', data.message);
+      console.error('获取资源失败:', data.message || '未知错误');
+      resourceList.value = [];
     }
   } catch (error) {
     console.error('获取资源失败:', error);
+    resourceList.value = [];
+    
+    // 根据错误类型显示不同的提示信息
+    let errorMessage = '无法加载资源列表';
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      errorMessage = '无法连接到后端服务，请确认后端服务是否已启动';
+    } else if (error.message && error.message.includes('HTTP错误')) {
+      errorMessage = `后端服务返回错误：${error.message}`;
+    } else {
+      errorMessage = `加载失败：${error.message || '未知错误'}，请检查后端服务是否正常运行`;
+    }
+    
+    // 显示用户友好的错误提示
+    alert(errorMessage);
   } finally {
     isLoading.value = false;
   }
 };
 
-// 2. 新增：处理搜索逻辑
-const handleSearch = async () => {
+// 2. 处理搜索逻辑 - 跳转到搜索页面
+const handleSearch = () => {
   const q = searchQuery.value.trim();
   if (!q) return;
-
-  isSearching.value = true;
-  resourceList.value = []; // 先清空列表
-
-  try {
-    // 调用 Python 写好的 5000 端口接口
-    const response = await fetch(`http://127.0.0.1:5050/api/search?q=${encodeURIComponent(q)}`);
-    const resData = await response.json();
-
-    if (resData.code === 200) {
-      // 【关键】数据映射：把搜索接口的数据格式，转成卡片需要的格式
-      // Python 返回: { title, snippet, tags, source_url }
-      // 前端卡片需要: { entity_name, description, image_url }
-      resourceList.value = resData.data.map(item => ({
-        id: item.id,
-        entity_name: item.title,      // 标题 -> 实体名
-        description: item.snippet,    // 摘要 -> 描述
-        image_url: item.image_url,              // 搜索接口返回的图片URL
-        source_url: item.source_url   // 保留来源链接
-      }));
-      
-      // 标记为搜索模式 (隐藏分页)
-      isSearchMode.value = true;
-    } else {
-      alert('搜索出错: ' + resData.msg);
-    }
-  } catch (error) {
-    console.error('搜索请求失败:', error);
-    alert('连接搜索服务失败，请确认 search_service.py 已运行');
-  } finally {
-    isSearching.value = false;
-  }
-};
-
-// 3. 新增：重置回默认列表
-const resetToDefault = () => {
-  searchQuery.value = '';
-  isSearchMode.value = false;
-  fetchResources(1); // 重新加载第一页数据
+  
+  // 跳转到搜索页面，并传递搜索关键词
+  router.push({
+    path: '/search',
+    query: { q: q }
+  });
 };
 
 // ==================== 原有分页逻辑 (保持不变) ====================
@@ -264,27 +237,30 @@ const handleImageError = (event) => {
 };
 
 // 初始化
-onMounted(() => {
+onMounted(async () => {
+  // 先检查后端服务是否可用
+  try {
+    const healthResponse = await fetch('/api/health');
+    if (!healthResponse.ok) {
+      console.warn('后端健康检查失败，状态码:', healthResponse.status);
+    } else {
+      const healthData = await healthResponse.json();
+      console.log('后端服务状态:', healthData);
+      if (healthData.database_status && healthData.database_status !== 'connected') {
+        console.error('数据库连接状态异常:', healthData.database_status);
+      }
+    }
+  } catch (error) {
+    console.error('无法连接到后端服务:', error);
+    alert('无法连接到后端服务，请确认后端服务已启动。\n\n请检查：\n1. 后端服务是否正在运行\n2. 查看终端窗口的错误信息\n3. 防火墙设置');
+  }
+  
+  // 加载资源列表
   fetchResources(1);
 });
 </script>
 
 <style scoped>
-/* 原有的样式保持不变，只添加一个返回按钮的样式 */
-.reset-btn {
-  padding: 10px 15px;
-  background-color: #f56c6c;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: background 0.3s;
-}
-.reset-btn:hover {
-  background-color: #ff4d4f;
-}
-
 .home-container {
   max-width: 1600px;
   margin: 0 auto;

@@ -3,13 +3,15 @@ REM 设置UTF-8编码，避免中文乱码
 chcp 65001 >nul
 setlocal
 
-echo 正在启动开发服务器...
+echo ============================================================
+echo 公共文化资源管理系统 - 开发服务器启动脚本
+echo ============================================================
 echo.
 
 REM 检查Python是否安装
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo 错误：未检测到Python，请先安装Python
+    echo [错误] 未检测到Python，请先安装Python
     pause
     exit /b 1
 )
@@ -17,17 +19,21 @@ if errorlevel 1 (
 REM 检查Node.js是否安装
 node --version >nul 2>&1
 if errorlevel 1 (
-    echo 错误：未检测到Node.js，请先安装Node.js
+    echo [错误] 未检测到Node.js，请先安装Node.js
     pause
     exit /b 1
 )
 
-REM 启动搜索服务
-echo 正在启动全文检索服务 (Port: 5050)...
-REM "start" 命令会打开一个新的 cmd 窗口运行 python
-REM "Search Service" 是窗口标题
-REM cmd /k 保证窗口不会自动关闭，方便你看报错
-start "Search Service (5050)" cmd /k "python search_service.py"
+REM 检查5173端口是否被占用（前端端口）
+echo [检查] 正在检查端口5173是否被占用...
+netstat -ano | findstr ":5173" >nul 2>&1
+if not errorlevel 1 (
+    echo [警告] 端口5173已被占用，前端服务可能无法正常启动
+    echo [提示] 如果这是之前启动的前端服务，可以忽略此警告
+)
+
+echo [成功] 端口检查完成
+echo.
 
 REM 进入前端目录
 cd FrontEnd
@@ -46,9 +52,10 @@ if errorlevel 1 (
 )
 
 echo.
-echo 启动前端和后端服务器...
-echo 前端地址: http://localhost:5173
-echo 后端地址: http://localhost:5000
+echo 启动开发服务器...
+echo ============================================================
+echo 访问地址: http://localhost:5173
+echo ============================================================
 echo.
 echo 按 Ctrl+C 停止服务器
 echo.

@@ -12,6 +12,7 @@
         <!-- 右侧 功能区 -->
         <div class="right-actions">
           <router-link to="/" class="text-link">首页</router-link>
+          <router-link to="/search" class="text-link">AI检索</router-link>
           <router-link to="/aigc" class="text-link" style="font-weight: 600; color: #409eff;">AIGC</router-link>
           <router-link to="/multimodal" class="text-link">图文互搜</router-link>
           <router-link to="/upload" class="text-link">用户上传</router-link>

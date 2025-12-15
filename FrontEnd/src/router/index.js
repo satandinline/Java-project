@@ -4,6 +4,7 @@ import AIGCView from '../components/AIGCView.vue';
 import MultiModalSearch from '../components/MultiModalSearch.vue';
 import ResourceUpload from '../components/ResourceUpload.vue';
 import AnnotationTasks from '../components/AnnotationTasks.vue';
+import SearchView from '../components/SearchView.vue';
 import Login from '../components/Login.vue';
 
 const routes = [
@@ -41,6 +42,12 @@ const routes = [
     path: '/annotation',
     name: 'Annotation',
     component: AnnotationTasks,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/search',
+    name: 'Search',
+    component: SearchView,
     meta: { requiresAuth: true }
   }
 ];

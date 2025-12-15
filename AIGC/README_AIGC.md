@@ -30,7 +30,7 @@ pip install flask flask-cors langchain langchain-openai langchain-community pymy
 python AIGC/aigc_api_server.py
 ```
 
-服务器将在 `http://localhost:5000` 启动。
+服务器将在 `http://localhost:8000` 启动（通过前端5173代理访问）。
 
 ### API端点
 
@@ -116,7 +116,7 @@ python AIGC/aigc_api_server.py
 
 ## 前端配置
 
-前端已配置Vite代理，会自动将 `/api/*` 请求转发到 `http://localhost:5000`。
+前端已配置Vite代理，会自动将 `/api/*` 请求转发到 `http://localhost:8000`。
 
 ### 一键启动（推荐）
 

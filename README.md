@@ -189,7 +189,8 @@ python AIGC/aigc_api_server.py
 
 访问地址：
 - 前端：http://localhost:5173
-- 后端API：http://localhost:5000
+- 前端：http://localhost:5173（用户访问地址）
+- 后端API：http://localhost:8000（内部服务，通过前端代理访问）
 
 ## 默认账户
 

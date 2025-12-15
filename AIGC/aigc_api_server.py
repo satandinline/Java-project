@@ -5,7 +5,7 @@ AIGC API服务器
 使用方法：
 1. 安装依赖：pip install flask flask-cors
 2. 运行：python aigc_api_server.py
-3. 服务器将在 http://localhost:5000 启动
+3. 服务器将在 http://localhost:8000 启动（通过前端5173代理访问）
 """
 import os
 import sys
@@ -48,6 +48,35 @@ auth_system = AuthSystem()
 # 初始化RAG和ImageAIGC系统（按用户动态创建）
 rag_systems = {}  # {user_id: rag_system}
 image_aigc_systems = {}  # {user_id: image_aigc_system}
+
+# 全局搜索RAG系统（用于全文检索功能，不按用户区分）
+search_rag_system = None
+
+def init_search_rag_system():
+    """初始化全局搜索RAG系统"""
+    global search_rag_system
+    if search_rag_system is not None:
+        return search_rag_system
+    
+    try:
+        from langchain_community.chat_models import ChatTongyi
+        from db_connection import get_default_db_connection
+        
+        ALIYUN_API_KEY = os.getenv("DASHSCOPE_API_KEY") or os.getenv("ALIYUN_API_KEY")
+        if not ALIYUN_API_KEY:
+            print("[搜索] 警告：未找到通义千问API密钥，搜索功能可能受限")
+            return None
+        
+        print("[搜索] 正在初始化AI辅助检索系统...")
+        tongyi_model = ChatTongyi(api_key=SecretStr(ALIYUN_API_KEY), model="qwen-turbo")
+        search_rag_system = CulturalResourceRAG(model=tongyi_model, persist_directory="./chroma_db")
+        print("[搜索] AI辅助检索系统初始化成功")
+        return search_rag_system
+    except Exception as e:
+        print(f"[搜索] 初始化AI辅助检索系统失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 def save_aigc_message_to_db(user_id: int, session_id: int, user_message: str, ai_message: str, 
                             model: str, image_url: Optional[str], image_from_users_url: Optional[str] = None, db_config: Dict = None):
@@ -1453,15 +1482,31 @@ def upload_resource():
 @app.route('/api/health', methods=['GET'])
 def health():
     """健康检查"""
+    # 测试数据库连接
+    db_status = 'unknown'
+    try:
+        from db_connection import get_user_db_connection
+        conn = get_user_db_connection()
+        if conn:
+            conn.close()
+            db_status = 'connected'
+        else:
+            db_status = 'failed'
+    except Exception as e:
+        db_status = f'error: {str(e)}'
+    
     return jsonify({
         'status': 'ok',
         'rag_systems_count': len(rag_systems),
-        'image_aigc_systems_count': len(image_aigc_systems)
+        'image_aigc_systems_count': len(image_aigc_systems),
+        'database_status': db_status,
+        'search_rag_initialized': search_rag_system is not None
     })
 
 @app.route('/api/home/resources', methods=['GET'])
 def get_home_resources():
     """获取首页资源列表（从crawled_images和cultural_entities表）"""
+    print(f"[API] 收到获取首页资源请求: page={request.args.get('page', 1)}, page_size={request.args.get('page_size', 8)}")
     try:
         import re
         import json
@@ -1473,9 +1518,19 @@ def get_home_resources():
         
         # 获取数据库连接（使用默认配置）
         from db_connection import get_user_db_connection
-        conn = get_user_db_connection()
-        if not conn:
-            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        conn = None
+        try:
+            print("[API] 正在连接数据库...")
+            conn = get_user_db_connection()
+            if not conn:
+                print("[API] 获取首页资源失败：数据库连接返回None")
+                return jsonify({'success': False, 'message': '数据库连接失败，请检查数据库配置和连接状态'}), 500
+            print("[API] 数据库连接成功")
+        except Exception as db_error:
+            print(f"[API] 获取首页资源失败：数据库连接异常: {db_error}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({'success': False, 'message': f'数据库连接异常：{str(db_error)}'}), 500
         
         try:
             with conn.cursor() as cursor:
@@ -1594,6 +1649,7 @@ def get_home_resources():
                     total_entities = total_entities_result['total'] if total_entities_result else 0
                     total = max(total, total_entities)
                 
+                print(f"[API] 成功获取资源: {len(resources)} 条记录")
                 return jsonify({
                     'success': True,
                     'resources': resources,
@@ -1605,16 +1661,175 @@ def get_home_resources():
                     }
                 })
         finally:
-            conn.close()
+            if conn:
+                try:
+                    conn.close()
+                except:
+                    pass
             
     except Exception as e:
         print(f"[API] 获取首页资源失败: {e}")
         import traceback
-        traceback.print_exc()
+        error_trace = traceback.format_exc()
+        print(f"[API] 错误堆栈:\n{error_trace}")
         return jsonify({
             'success': False,
-            'message': f'获取资源失败：{str(e)}'
+            'message': f'获取资源失败：{str(e)}',
+            'error_type': type(e).__name__
         }), 500
+
+@app.route('/api/search', methods=['GET'])
+def search_resources():
+    """全文检索接口（集成自search_service.py）"""
+    keyword = request.args.get('q', '').strip()
+    user_id = request.args.get('user_id', None)
+    
+    if not keyword:
+        return jsonify({"code": 400, "msg": "请输入搜索关键词", "data": []})
+    
+    # 初始化搜索RAG系统
+    rag_system = init_search_rag_system()
+    if not rag_system:
+        return jsonify({"code": 500, "msg": "搜索系统初始化失败，请检查API密钥配置", "data": []})
+    
+    # 获取数据库连接
+    from db_connection import get_default_db_connection
+    conn = get_default_db_connection()
+    if not conn:
+        return jsonify({"code": 500, "msg": "数据库连接失败", "data": []})
+    
+    # AI语义提取提示模板
+    semantic_extraction_prompt = """
+你是一位专业的文化资源检索专家，请将用户的自然语言查询转换为精确的检索关键词和实体类型。
+
+用户查询: {query}
+
+请按照以下JSON格式返回结果：
+{{
+  "keywords": ["关键词1", "关键词2", ...],  # 提取的核心关键词
+  "entities": [{{"name": "实体名称", "type": "实体类型"}}],  # 提取的实体及其类型
+  "advanced_query": "优化后的检索式"  # 适合数据库检索的高级检索式
+}}
+
+实体类型包括：节日、习俗、人物、作品、事件、地点等。
+"""
+    
+    try:
+        # ------------------------
+        # 1. AI语义提取构建高级检索式
+        # ------------------------
+        print(f"[搜索] 正在进行AI语义分析: {keyword}")
+        extraction_result = rag_system.model.invoke(
+            semantic_extraction_prompt.format(query=keyword)
+        ).content
+        
+        # 解析AI返回的结果
+        try:
+            ai_analysis = json.loads(extraction_result)
+            advanced_query = ai_analysis.get("advanced_query", keyword)
+            keywords = ai_analysis.get("keywords", [keyword])
+            print(f"[搜索] AI分析结果 - 关键词: {keywords}, 高级检索式: {advanced_query}")
+        except:
+            # 如果解析失败，使用原始关键词
+            advanced_query = keyword
+            keywords = [keyword]
+            ai_analysis = {"keywords": keywords, "advanced_query": advanced_query}
+            print(f"[搜索] AI分析失败，使用原始关键词: {keyword}")
+        
+        with conn.cursor() as cursor:
+            # ------------------------
+            # 2. 增强的检索查询
+            # ------------------------
+            sql = """
+                (SELECT 
+                    id, 
+                    entity_name as title, 
+                    description, 
+                    related_images_url as image_url,
+                    source,
+                    '传统实体' as type_tag,
+                    MATCH(entity_name, description) AGAINST(%s IN NATURAL LANGUAGE MODE) as relevance_score,
+                    1 as type_weight  -- 传统实体权重更高
+                FROM cultural_entities 
+                WHERE MATCH(entity_name, description) 
+                AGAINST(%s IN NATURAL LANGUAGE MODE)
+                LIMIT 25)
+                
+                UNION ALL
+                
+                (SELECT 
+                    id, 
+                    entity_name as title, 
+                    description, 
+                    related_images_url as image_url,
+                    'AIGC生成' as source,
+                    'AI实体' as type_tag,
+                    MATCH(entity_name, description) AGAINST(%s IN NATURAL LANGUAGE MODE) as relevance_score,
+                    0.5 as type_weight  -- AI生成实体权重较低
+                FROM AIGC_cultural_entities 
+                WHERE MATCH(entity_name, description) 
+                AGAINST(%s IN NATURAL LANGUAGE MODE)
+                LIMIT 25);
+            """
+            
+            print(f"[搜索] 正在双表检索，查询词: {advanced_query}")
+            cursor.execute(sql, (advanced_query, advanced_query, advanced_query, advanced_query))
+            results = cursor.fetchall()
+            
+            # ------------------------
+            # 3. 检索结果排序
+            # ------------------------
+            def sort_key(result):
+                # 综合排序：相关性得分 * 类型权重
+                relevance = result.get('relevance_score', 0)
+                type_weight = result.get('type_weight', 0.5)
+                return -(relevance * type_weight)
+            
+            # 按综合得分排序
+            sorted_results = sorted(results, key=sort_key)
+            
+            formatted_list = []
+            
+            for row in sorted_results:
+                # 提取描述摘要
+                desc = row.get('description', '')
+                if desc:
+                    snippet = desc[:100] + '...'
+                else:
+                    snippet = '暂无详细描述'
+                
+                # 提取图片
+                img = row.get('image_url')
+                if not img or img == 'null':
+                    img = None
+                
+                # 组装数据
+                formatted_list.append({
+                    "id": row['id'],
+                    "title": row['title'],
+                    "snippet": snippet,
+                    "tags": [row['type_tag']], 
+                    "source_url": row.get('source', '#'),
+                    "image_url": img,
+                    "relevance_score": row.get('relevance_score', 0)  # 返回相关性得分
+                })
+            
+            return jsonify({
+                "code": 200,
+                "msg": "success",
+                "data": formatted_list,
+                "ai_analysis": ai_analysis  # 返回AI分析结果，供前端展示
+            })
+    
+    except Exception as e:
+        print(f"[搜索] 搜索错误: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"code": 500, "msg": str(e), "data": []})
+        
+    finally:
+        if conn:
+            conn.close()
 
 @app.route('/api/images/crawled/<path:filename>')
 def serve_crawled_image(filename):
@@ -2536,7 +2751,19 @@ def serve_public_file(filename):
         return jsonify({'error': '文件不存在'}), 404
 
 if __name__ == '__main__':
+    print("=" * 60)
+    # 使用8000端口作为后端服务端口（通过前端5173代理访问）
+    backend_port = 8000
+    
     print("启动AIGC API服务器...")
+    print("=" * 60)
     print("注意：RAG和ImageAIGC系统将按用户动态创建")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    print("搜索RAG系统将在首次搜索请求时初始化")
+    print("=" * 60)
+    try:
+        app.run(host='0.0.0.0', port=backend_port, debug=True)
+    except Exception as e:
+        print(f"服务器启动失败: {e}")
+        import traceback
+        traceback.print_exc()
 

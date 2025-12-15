@@ -44,7 +44,7 @@ npm run dev:full
 
 这会同时启动：
 - 前端开发服务器：http://localhost:5173
-- 后端API服务器：http://localhost:5000
+- 后端API服务器：http://localhost:8000（内部服务，通过前端代理访问）
 
 ### 方式三：分别启动
 
@@ -231,9 +231,9 @@ npm run preview
 ### Vite代理配置
 
 在 `vite.config.js` 中配置了以下代理：
-- `/api/*` → `http://localhost:5000` (后端API)
-- `/avatars/*` → `http://localhost:5000` (用户头像)
-- `/default.jpg` → `http://localhost:5000` (默认头像)
+- `/api/*` → `http://localhost:8000` (后端API)
+- `/avatars/*` → `http://localhost:8000` (用户头像)
+- `/default.jpg` → `http://localhost:8000` (默认头像)
 
 ### 环境变量
 

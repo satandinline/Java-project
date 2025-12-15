@@ -10,7 +10,8 @@ import sys
 
 # 导入RAG系统
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from langchain_tongyi import ChatTongyi
+from langchain_community.chat_models import ChatTongyi
+from pydantic import SecretStr
 from AIGC.RAG import CulturalResourceRAG
 
 app = Flask(__name__)
@@ -19,7 +20,10 @@ CORS(app)
 
 # 初始化RAG系统
 print("正在初始化AI辅助检索系统...")
-tongyi_model = ChatTongyi(api_key=os.getenv("ALIYUN_API_KEY"))
+ALIYUN_API_KEY = os.getenv("DASHSCOPE_API_KEY") or os.getenv("ALIYUN_API_KEY")
+if not ALIYUN_API_KEY:
+    print("警告：未找到通义千问API密钥，请设置DASHSCOPE_API_KEY或ALIYUN_API_KEY环境变量")
+tongyi_model = ChatTongyi(api_key=SecretStr(ALIYUN_API_KEY or ""), model="qwen-turbo")
 rag_system = CulturalResourceRAG(model=tongyi_model, persist_directory="./chroma_db")
 
 # AI语义提取提示模板
