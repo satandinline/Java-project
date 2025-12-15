@@ -26,17 +26,21 @@
     <!-- ==================== 修改开始：搜索栏 ==================== -->
     <div class="search-section">
       <div class="search-bar">
-        <!-- 1. 绑定 v-model 和回车事件 -->
+        <!-- 支持空输入跳转 -->
         <input 
           type="text" 
           v-model="searchQuery" 
-          @keyup.enter="handleSearch"
+          @keyup.enter="handleSearchFull"
           placeholder="请输入检索词 (例如：寒食节)..." 
         />
         
-        <!-- 2. 绑定点击事件，跳转到搜索页面 -->
-        <button class="ai-search-btn" @click="handleSearch">
+        <!-- 全文检索入口 -->
+        <button class="ai-search-btn" @click="handleSearchFull">
           全文检索
+        </button>
+        <!-- AI检索入口 -->
+        <button class="ai-search-btn" @click="handleSearchAI">
+          AI检索
         </button>
       </div>
 
@@ -178,14 +182,19 @@ const fetchResources = async (page = 1) => {
 };
 
 // 2. 处理搜索逻辑 - 跳转到搜索页面
-const handleSearch = () => {
+const handleSearchFull = () => {
   const q = searchQuery.value.trim();
-  if (!q) return;
-  
-  // 跳转到搜索页面，并传递搜索关键词
   router.push({
     path: '/search',
-    query: { q: q }
+    query: { q, mode: 'full' }
+  });
+};
+
+const handleSearchAI = () => {
+  const q = searchQuery.value.trim();
+  router.push({
+    path: '/search',
+    query: { q, mode: 'ai' }
   });
 };
 
@@ -336,7 +345,7 @@ onMounted(async () => {
 .search-section { display: flex; justify-content: center; margin: 60px 0; }
 .search-bar { display: flex; width: 70%; border: 2px solid #eee; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
 .search-bar input { flex: 1; border: none; padding: 18px 25px; outline: none; background: white; font-size: 16px; }
-.ai-search-btn { background-color: #409eff; color: white; border: none; padding: 0 40px; cursor: pointer; font-size: 16px; font-weight: 500; transition: background 0.3s; }
+.ai-search-btn { background-color: #409eff; color: white; border: none; padding: 0 40px; cursor: pointer; font-size: 16px; font-weight: 500; transition: background 0.3s; white-space: nowrap; }
 .ai-search-btn:hover { background-color: #66b1ff; }
 .ai-search-btn:disabled { background-color: #a0cfff; cursor: not-allowed; }
 

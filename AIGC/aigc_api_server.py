@@ -1773,8 +1773,48 @@ def search_resources():
             """
             
             print(f"[搜索] 正在双表检索，查询词: {advanced_query}")
-            cursor.execute(sql, (advanced_query, advanced_query, advanced_query, advanced_query))
-            results = cursor.fetchall()
+            try:
+                cursor.execute(sql, (advanced_query, advanced_query, advanced_query, advanced_query))
+                results = cursor.fetchall()
+            except Exception as e:
+                # FULLTEXT 索引缺失时的回退：使用 LIKE
+                err_code = getattr(e, "args", [None])[0]
+                if err_code == 1191:  # Can't find FULLTEXT index matching the column list
+                    print("[搜索] 未找到 FULLTEXT 索引，使用 LIKE 回退查询")
+                    like_q = f"%{advanced_query}%"
+                    fallback_sql = """
+                        (SELECT 
+                            id, 
+                            entity_name as title, 
+                            description, 
+                            related_images_url as image_url,
+                            source,
+                            '传统实体' as type_tag,
+                            0.6 as relevance_score,
+                            1 as type_weight
+                        FROM cultural_entities 
+                        WHERE entity_name LIKE %s OR description LIKE %s
+                        LIMIT 25)
+                        
+                        UNION ALL
+                        
+                        (SELECT 
+                            id, 
+                            entity_name as title, 
+                            description, 
+                            related_images_url as image_url,
+                            'AIGC生成' as source,
+                            'AI实体' as type_tag,
+                            0.4 as relevance_score,
+                            0.5 as type_weight
+                        FROM AIGC_cultural_entities 
+                        WHERE entity_name LIKE %s OR description LIKE %s
+                        LIMIT 25);
+                    """
+                    cursor.execute(fallback_sql, (like_q, like_q, like_q, like_q))
+                    results = cursor.fetchall()
+                else:
+                    raise
             
             # ------------------------
             # 3. 检索结果排序
@@ -1830,6 +1870,90 @@ def search_resources():
     finally:
         if conn:
             conn.close()
+
+
+@app.route('/api/ai_search', methods=['GET'])
+def ai_search():
+    """
+    AI 检索接口：使用阿里云通义模型对用户问题进行语义分析，并结合向量检索的参考资料给出答案。
+    - 依赖环境变量 DASHSCOPE_API_KEY 或 ALIYUN_API_KEY
+    - 返回结构：data 为参考列表，ai_analysis 为 LLM 生成的回答和建议
+    """
+    keyword = request.args.get('q', '').strip()
+    if not keyword:
+        return jsonify({"code": 400, "msg": "请输入搜索关键词", "data": []})
+
+    rag_system = init_search_rag_system()
+    if not rag_system:
+        return jsonify({"code": 500, "msg": "AI 检索初始化失败，请检查阿里云 API Key 配置", "data": []})
+
+    # 1) 向量检索参考资料
+    docs = []
+    try:
+        docs = rag_system._call_retriever(keyword) or []
+    except Exception as e:
+        print(f"[AI检索] 向量检索失败: {e}")
+        docs = []
+
+    def safe_content(text: str, limit: int = 600):
+        text = text or ""
+        return text[:limit] + ("..." if len(text) > limit else "")
+
+    # 2) 组织上下文
+    context_blocks = []
+    for idx, doc in enumerate(docs[:5]):
+        meta = getattr(doc, "metadata", {}) or {}
+        title = meta.get("title") or meta.get("entity_name") or f"资料{idx+1}"
+        content = getattr(doc, "page_content", "") or ""
+        context_blocks.append(f"[{idx+1}] 标题：{title}\n内容：{safe_content(content)}")
+    context_text = "\n\n".join(context_blocks) if context_blocks else "（无可用参考资料）"
+
+    # 3) 调用阿里云通义模型生成回答
+    prompt = f"""
+你是一个文化资源 AI 检索助手。请结合【用户问题】和【参考资料】给出简明回答，并返回 JSON：
+{{
+  "answer": "面向用户的简洁回答",
+  "suggestions": ["可执行建议1", "可执行建议2"],
+  "used_sources": ["参考1", "参考2"]
+}}
+
+【用户问题】：
+{keyword}
+
+【参考资料】：
+{context_text}
+    """
+    ai_analysis = {}
+    try:
+        resp_text = rag_system._call_model(prompt)
+        ai_analysis = json.loads(resp_text) if resp_text else {}
+    except Exception as e:
+        print(f"[AI检索] 调用阿里云模型失败: {e}")
+        ai_analysis = {"answer": "AI 检索暂时不可用，请稍后重试。", "suggestions": [], "used_sources": []}
+
+    # 4) 构造返回的参考列表（用于前端列表展示）
+    results = []
+    for idx, doc in enumerate(docs):
+        meta = getattr(doc, "metadata", {}) or {}
+        title = meta.get("title") or meta.get("entity_name") or f"AI参考{idx+1}"
+        content = getattr(doc, "page_content", "") or ""
+        results.append({
+            "id": idx + 1,
+            "title": title,
+            "entity_name": title,
+            "description": safe_content(content, 200),
+            "snippet": safe_content(content, 200),
+            "image_url": meta.get("image_url"),
+            "source_url": meta.get("source") or meta.get("url") or "#",
+            "tags": ["AI检索"]
+        })
+
+    return jsonify({
+        "code": 200,
+        "msg": "success",
+        "data": results,
+        "ai_analysis": ai_analysis
+    })
 
 @app.route('/api/images/crawled/<path:filename>')
 def serve_crawled_image(filename):

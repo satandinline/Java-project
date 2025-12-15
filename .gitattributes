@@ -1,0 +1,26 @@
+# 确保批处理文件使用 CRLF 换行符
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Shell 脚本使用 LF 换行符
+*.sh text eol=lf
+
+# Python 文件使用 LF 换行符
+*.py text eol=lf
+
+# 配置文件使用 LF 换行符
+*.json text eol=lf
+*.js text eol=lf
+*.vue text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# 其他文本文件
+*.txt text eol=lf
+*.sql text eol=lf
+

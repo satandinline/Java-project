@@ -1,7 +1,23 @@
 <template>
   <div class="search-view-container">
     <div class="search-header">
-      <h1 class="search-title">AI全文检索</h1>
+      <h1 class="search-title">全文/AI检索</h1>
+      <div class="mode-switch">
+        <button 
+          :class="['mode-btn', searchMode === 'full' ? 'active' : '']" 
+          @click="switchMode('full')"
+          :disabled="isSearching"
+        >
+          全文检索
+        </button>
+        <button 
+          :class="['mode-btn', searchMode === 'ai' ? 'active' : '']" 
+          @click="switchMode('ai')"
+          :disabled="isSearching"
+        >
+          AI检索
+        </button>
+      </div>
       <div class="search-bar">
         <input 
           type="text" 
@@ -11,7 +27,7 @@
           class="search-input"
         />
         <button class="search-btn" @click="handleSearch" :disabled="isSearching">
-          {{ isSearching ? '检索中...' : '全文检索' }}
+          {{ isSearching ? '检索中...' : (searchMode === 'ai' ? 'AI检索' : '全文检索') }}
         </button>
         <button class="back-btn" @click="goBack">返回首页</button>
       </div>
@@ -21,8 +37,8 @@
     <div class="search-results" v-if="hasSearched">
       <!-- 搜索结果为空的提示 -->
       <div v-if="!isSearching && resourceList.length === 0" class="no-results">
-        <p>未找到与"{{ searchQuery }}"相关的内容</p>
-        <p class="hint">请尝试使用其他关键词</p>
+        <p>{{ emptyMessage }}</p>
+        <p class="hint">请尝试更换关键词或稍后重试</p>
       </div>
 
       <!-- 搜索结果列表 -->
@@ -93,18 +109,32 @@ const router = useRouter();
 const route = useRoute();
 
 const searchQuery = ref('');
+const searchMode = ref('full'); // full | ai
 const resourceList = ref([]);
 const isSearching = ref(false);
 const hasSearched = ref(false);
 const aiAnalysis = ref({});
+const emptyMessage = ref('抱歉，暂无数据，请稍后重试');
 
 // 从路由参数获取搜索关键词
 onMounted(() => {
+  if (route.query.mode === 'ai') {
+    searchMode.value = 'ai';
+  }
   if (route.query.q) {
     searchQuery.value = route.query.q;
     handleSearch();
   }
 });
+
+const switchMode = (mode) => {
+  if (mode === searchMode.value) return;
+  searchMode.value = mode;
+  router.replace({ query: { ...route.query, mode } });
+  if (searchQuery.value.trim()) {
+    handleSearch(); // 切换模式时自动重查
+  }
+};
 
 const handleSearch = async () => {
   const q = searchQuery.value.trim();
@@ -113,9 +143,12 @@ const handleSearch = async () => {
   isSearching.value = true;
   hasSearched.value = true;
   resourceList.value = [];
+  aiAnalysis.value = {};
 
   try {
-    const response = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    // 根据模式选择不同的后端接口
+    const endpoint = getEndpoint(searchMode.value, q);
+    const response = await fetch(endpoint);
     
     if (!response.ok) {
       throw new Error(`HTTP错误! 状态: ${response.status}`);
@@ -124,30 +157,47 @@ const handleSearch = async () => {
     const resData = await response.json();
 
     if (resData.code === 200) {
-      resourceList.value = resData.data.map(item => ({
+      resourceList.value = (resData.data || []).map(item => ({
         id: item.id,
         entity_name: item.title,
         title: item.title,
-        description: item.snippet,
-        snippet: item.snippet,
+        description: item.snippet || item.description,
+        snippet: item.snippet || item.description,
         image_url: item.image_url,
         source_url: item.source_url,
         tags: item.tags || []
       }));
       
-      // 保存AI分析结果
+      // AI 模式下，优先展示 ai_analysis；全文检索也兼容
       if (resData.ai_analysis) {
         aiAnalysis.value = resData.ai_analysis;
       }
+
+      if (resourceList.value.length === 0) {
+        emptyMessage.value = '抱歉，暂无数据，请稍后重试';
+      }
     } else {
-      alert('搜索出错: ' + resData.msg);
+      emptyMessage.value = '抱歉，暂无数据，请稍后重试';
+      alert('搜索出错: ' + (resData.msg || '未知错误'));
     }
   } catch (error) {
     console.error('搜索请求失败:', error);
+    emptyMessage.value = '抱歉，暂无数据，请稍后重试';
     alert('搜索服务连接失败，请检查后端服务是否正常运行');
   } finally {
     isSearching.value = false;
   }
+};
+
+// 选择不同检索接口
+const getEndpoint = (mode, q) => {
+  const encoded = encodeURIComponent(q);
+  if (mode === 'ai') {
+    // 优先尝试独立 AI 接口，如不存在可后端兼容 /api/search?mode=ai
+    return `/api/ai_search?q=${encoded}`;
+  }
+  // 全文检索：直接数据库相关性
+  return `/api/search?q=${encoded}`;
 };
 
 const searchExample = (query) => {
@@ -184,6 +234,34 @@ const handleImageError = (event) => {
   color: #303133;
   margin-bottom: 30px;
   text-align: center;
+}
+
+.mode-switch {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.mode-btn {
+  padding: 10px 20px;
+  border: 1px solid #dcdfe6;
+  background: #f5f7fa;
+  color: #606266;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mode-btn.active {
+  background: #409eff;
+  color: #fff;
+  border-color: #409eff;
+}
+
+.mode-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 
 .search-bar {
