@@ -31,6 +31,20 @@
           >
             编辑标注
           </button>
+          <button 
+            @click="approveAnnotation(task.id)" 
+            v-if="task.status === '已标注' && isAdmin"
+            class="approve-btn"
+          >
+            审核通过
+          </button>
+          <button 
+            @click="rejectAnnotation(task.id)" 
+            v-if="task.status === '已标注' && isAdmin"
+            class="reject-btn"
+          >
+            驳回
+          </button>
         </div>
       </div>
     </div>
@@ -42,37 +56,117 @@
         <h3>标注编辑</h3>
         
         <div class="annotation-content">
-          <div v-if="currentAnnotation && currentAnnotation.entities">
-            <h4>实体标注:</h4>
-            <div class="entities-list">
-              <div class="entity-item" v-for="(entity, index) in currentAnnotation.entities" :key="index">
-                <input 
-                  type="text" 
-                  v-model="entity.name" 
-                  placeholder="实体名称"
-                >
-                <select v-model="entity.type">
-                  <option value="人物">人物</option>
-                  <option value="地点">地点</option>
-                  <option value="事件">事件</option>
-                  <option value="物品">物品</option>
-                  <option value="其他">其他</option>
-                </select>
-                <button @click="removeEntity(index)">删除</button>
-              </div>
+          <div v-if="currentAnnotation">
+            <h4>实体标注信息:</h4>
+            
+            <div class="form-group">
+              <label>实体名称 *</label>
+              <input 
+                type="text" 
+                v-model="currentAnnotation.entity_name" 
+                placeholder="请输入实体名称"
+                required
+              >
             </div>
             
-            <button class="add-entity-btn" @click="addEntity">添加实体</button>
+            <div class="form-group">
+              <label>实体类型 *</label>
+              <select v-model="currentAnnotation.entity_type">
+                <option value="人物">人物</option>
+                <option value="作品">作品</option>
+                <option value="事件">事件</option>
+                <option value="地点">地点</option>
+                <option value="其他">其他</option>
+              </select>
+            </div>
             
-            <div class="annotation-notes">
-              <label>标注说明:</label>
+            <div class="form-group">
+              <label>描述</label>
               <textarea 
                 v-model="currentAnnotation.description"
-                placeholder="添加标注说明..."
+                placeholder="请输入实体描述..."
+                rows="3"
               ></textarea>
             </div>
             
-            <button class="save-annotation-btn" @click="saveAnnotation">保存标注</button>
+            <div class="form-group">
+              <label>来源</label>
+              <input 
+                type="text" 
+                v-model="currentAnnotation.source" 
+                placeholder="请输入来源信息"
+              >
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label>时期年代</label>
+                <input 
+                  type="text" 
+                  v-model="currentAnnotation.period_era" 
+                  placeholder="例如：唐代、明清"
+                >
+              </div>
+              
+              <div class="form-group">
+                <label>地理坐标</label>
+                <input 
+                  type="text" 
+                  v-model="currentAnnotation.geo_coordinates" 
+                  placeholder="例如：经度,纬度"
+                >
+              </div>
+            </div>
+            
+            <div class="form-group">
+              <label>文化区域</label>
+              <input 
+                type="text" 
+                v-model="currentAnnotation.cultural_region" 
+                placeholder="例如：华北、江南"
+              >
+            </div>
+            
+            <div class="form-group">
+              <label>风格特征</label>
+              <textarea 
+                v-model="currentAnnotation.style_features"
+                placeholder="请输入风格特征..."
+                rows="2"
+              ></textarea>
+            </div>
+            
+            <div class="form-group">
+              <label>文化价值</label>
+              <textarea 
+                v-model="currentAnnotation.cultural_value"
+                placeholder="请输入文化价值..."
+                rows="2"
+              ></textarea>
+            </div>
+            
+            <div class="form-group">
+              <label>相关图像链接</label>
+              <input 
+                type="text" 
+                v-model="currentAnnotation.related_images_url" 
+                placeholder="请输入图像URL"
+              >
+            </div>
+            
+            <div class="form-group">
+              <label>数字资源链接</label>
+              <input 
+                type="text" 
+                v-model="currentAnnotation.digital_resource_link" 
+                placeholder="请输入数字资源URL"
+              >
+            </div>
+            
+            <div class="annotation-actions">
+              <button class="save-annotation-btn" @click="saveAnnotation">保存标注</button>
+              <button class="cancel-btn" @click="closeAnnotationModal">取消</button>
+            </div>
           </div>
         </div>
       </div>
@@ -87,13 +181,30 @@ const tasks = ref([]);
 const statusFilter = ref('');
 const showAnnotationModal = ref(false);
 const currentTaskId = ref(null);
+// 检查是否为管理员
+const isAdmin = ref(false);
 const currentAnnotation = ref({
-  entities: [],
-  description: ''
+  // 新字段结构
+  entity_name: '',
+  entity_type: '其他',
+  description: '',
+  source: '',
+  period_era: '',
+  geo_coordinates: '',
+  cultural_region: '',
+  style_features: '',
+  cultural_value: '',
+  related_images_url: '',
+  digital_resource_link: '',
+  // 兼容旧格式
+  entities: []
 });
 
 onMounted(() => {
   fetchTasks();
+  // 检查用户角色
+  const userInfo = JSON.parse(localStorage.getItem('userInfo'));
+  isAdmin.value = userInfo && userInfo.role === '管理员';
 });
 
 const fetchTasks = async () => {
@@ -147,7 +258,25 @@ const viewAnnotation = async (taskId) => {
     const data = await response.json();
     if (data.success) {
       currentTaskId.value = taskId;
-      currentAnnotation.value = data.annotations || { entities: [], description: '' };
+      
+      // 处理新格式数据
+      const annotations = data.annotations || {};
+      currentAnnotation.value = {
+        entity_name: annotations.entity_name || '',
+        entity_type: annotations.entity_type || '其他',
+        description: annotations.description || '',
+        source: annotations.source || '',
+        period_era: annotations.period_era || '',
+        geo_coordinates: annotations.geo_coordinates || '',
+        cultural_region: annotations.cultural_region || '',
+        style_features: annotations.style_features || '',
+        cultural_value: annotations.cultural_value || '',
+        related_images_url: annotations.related_images_url || '',
+        digital_resource_link: annotations.digital_resource_link || '',
+        // 兼容旧格式
+        entities: annotations.entities || []
+      };
+      
       showAnnotationModal.value = true;
     } else {
       alert('获取标注详情失败: ' + data.message);
@@ -165,32 +294,114 @@ const editAnnotation = (taskId) => {
 const closeAnnotationModal = () => {
   showAnnotationModal.value = false;
   currentTaskId.value = null;
-  currentAnnotation.value = { entities: [], description: '' };
+  currentAnnotation.value = {
+    entity_name: '',
+    entity_type: '其他',
+    description: '',
+    source: '',
+    period_era: '',
+    geo_coordinates: '',
+    cultural_region: '',
+    style_features: '',
+    cultural_value: '',
+    related_images_url: '',
+    digital_resource_link: '',
+    entities: []
+  };
 };
 
-const addEntity = () => {
-  currentAnnotation.value.entities.push({
-    name: '',
-    type: '其他'
-  });
+const approveAnnotation = async (taskId) => {
+  if (!confirm('确定要审核通过此标注吗？通过后数据将迁移到正式表。')) {
+    return;
+  }
+  
+  try {
+    const userInfo = JSON.parse(localStorage.getItem('userInfo'));
+    const response = await fetch(`/api/annotation/tasks/${taskId}/approve`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': userInfo.id.toString()
+      }
+    });
+    
+    const data = await response.json();
+    if (data.success) {
+      alert('标注已审核通过，数据已迁移');
+      fetchTasks();
+    } else {
+      alert('审核失败: ' + data.message);
+    }
+  } catch (error) {
+    console.error('审核失败:', error);
+    alert('审核失败');
+  }
 };
 
-const removeEntity = (index) => {
-  currentAnnotation.value.entities.splice(index, 1);
+const rejectAnnotation = async (taskId) => {
+  const reason = prompt('请输入驳回原因：');
+  if (!reason) {
+    return;
+  }
+  
+  try {
+    const userInfo = JSON.parse(localStorage.getItem('userInfo'));
+    const response = await fetch(`/api/annotation/tasks/${taskId}/reject`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': userInfo.id.toString()
+      },
+      body: JSON.stringify({ reason })
+    });
+    
+    const data = await response.json();
+    if (data.success) {
+      alert('标注已驳回');
+      fetchTasks();
+    } else {
+      alert('驳回失败: ' + data.message);
+    }
+  } catch (error) {
+    console.error('驳回失败:', error);
+    alert('驳回失败');
+  }
 };
 
 const saveAnnotation = async () => {
   if (!currentTaskId.value) return;
   
+  // 验证必填字段
+  if (!currentAnnotation.value.entity_name || !currentAnnotation.value.entity_name.trim()) {
+    alert('请输入实体名称');
+    return;
+  }
+  
   try {
     const userInfo = JSON.parse(localStorage.getItem('userInfo'));
+    
+    // 构建请求数据（使用新格式）
+    const annotationData = {
+      entity_name: currentAnnotation.value.entity_name.trim(),
+      entity_type: currentAnnotation.value.entity_type || '其他',
+      description: currentAnnotation.value.description || '',
+      source: currentAnnotation.value.source || '',
+      period_era: currentAnnotation.value.period_era || '',
+      geo_coordinates: currentAnnotation.value.geo_coordinates || '',
+      cultural_region: currentAnnotation.value.cultural_region || '',
+      style_features: currentAnnotation.value.style_features || '',
+      cultural_value: currentAnnotation.value.cultural_value || '',
+      related_images_url: currentAnnotation.value.related_images_url || '',
+      digital_resource_link: currentAnnotation.value.digital_resource_link || ''
+    };
+    
     const response = await fetch(`/api/annotation/tasks/${currentTaskId.value}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
         'X-User-Id': userInfo.id.toString()
       },
-      body: JSON.stringify(currentAnnotation.value)
+      body: JSON.stringify(annotationData)
     });
     
     const data = await response.json();
@@ -365,5 +576,79 @@ const saveAnnotation = async () => {
   border-radius: 4px;
   cursor: pointer;
   font-size: 16px;
+}
+
+.form-group {
+  margin-bottom: 15px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: 500;
+  color: #333;
+}
+
+.form-group input[type="text"],
+.form-group textarea,
+.form-group select {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.form-group textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 15px;
+}
+
+.annotation-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.save-annotation-btn:hover {
+  background-color: #359e75;
+}
+
+.cancel-btn {
+  background-color: #f5f5f5;
+  color: #333;
+  border: 1px solid #ddd;
+  padding: 10px 20px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.cancel-btn:hover {
+  background-color: #e8e8e8;
+}
+
+.approve-btn {
+  background-color: #52c41a;
+  color: white;
+}
+
+.approve-btn:hover {
+  background-color: #73d13d;
+}
+
+.reject-btn {
+  background-color: #ff4d4f;
+  color: white;
+}
+
+.reject-btn:hover {
+  background-color: #ff7875;
 }
 </style>

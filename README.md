@@ -26,7 +26,7 @@ Java-project/
 │   ├── run_init_schema.py # 自动执行SQL脚本的Python工具
 │   ├── erdiagram.md       # ER图（Mermaid格式）
 │   └── readme.md          # 数据库说明
-├── avatars/               # 用户上传的头像存储目录
+├── uploads/               # 用户上传的资源文件存储目录
 ├── db_connection.py       # 数据库连接管理（统一配置）
 ├── login.py              # 用户登录认证系统
 ├── upload_handler.py     # 用户上传处理
@@ -76,7 +76,7 @@ Java-project/
 - 标注任务自动创建
 
 ### 5. 数据管理
-- 14个数据表的完整管理
+- 17个数据表的完整管理
 - 支持视图和索引
 - 数据关联和查询优化
 
@@ -138,7 +138,7 @@ mysql -u root -p < database_files/init_schema.sql
 
 脚本会自动：
 - 创建数据库 `java_project`
-- 创建所有14个表
+- 创建所有17个表
 - 创建视图和索引
 - 创建默认管理员账户（admin/123456）
 
@@ -244,8 +244,7 @@ python AIGC/aigc_api_server.py
 - **`AIGC_graph/`**：存储AIGC生成的图片（图片AIGC功能）
 - **`crawled_images/`**：存储爬虫抓取的图片（文化资源图片）
 - **`FrontEnd/public/`**：存储前端静态资源和用户头像
-- **`avatars/`**：当前未使用（空文件夹）
-- **`images/`**：当前未使用（空文件夹）
+- **`uploads/`**：存储用户上传的待审核资源文件
 
 详细说明请参考 [FOLDER_STRUCTURE.md](FOLDER_STRUCTURE.md)
 

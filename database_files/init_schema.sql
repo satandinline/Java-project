@@ -11,11 +11,10 @@
 -- 注意：此脚本会创建全新数据库，如果数据库已存在，会保留现有数据
 -- --------------------------------------------------
 
--- 创建数据库java_project，并切换到该数据库 
+-- 创建数据库java_project（如果不存在）
 CREATE DATABASE IF NOT EXISTS java_project CHARACTER SET utf8mb4;
 
-
-
+-- 切换到该数据库
 USE java_project;
 
 
@@ -53,11 +52,11 @@ CREATE TABLE IF NOT EXISTS `users` (
 CREATE TABLE IF NOT EXISTS `cultural_resources` (
   `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
   `title` VARCHAR(255) COMMENT '节日（文化资源涉及到的传统节日的名称）',
-  `resource_type` VARCHAR(50) COMMENT '资源类型（如：文本、图像）',
-  `file_format` VARCHAR(20) COMMENT '文件格式（如：TXT, JPG）',
+  `resource_type` VARCHAR(50) COMMENT '资源类型（文本、图像、视频、数据态资源、虚拟展示资源等。数据态资源：用于AI分析的原始数据集；虚拟展示资源：全景图像、3D模型文件等）',
+  `file_format` VARCHAR(20) COMMENT '文件格式（如：TXT, JPG, MP4, OBJ, GLB等）',
   `source_from` VARCHAR(255) COMMENT '数据来源（如：网站名称）',
   `source_url` TEXT COMMENT '原始URL链接',
-  `content_feature_data` LONGTEXT COMMENT '存储文本内容或特征向量的引用',
+  `content_feature_data` LONGTEXT COMMENT '存储用于知识图谱构建的实体向量或AI提取的语义特征（数据赋能）',
   `version` INT DEFAULT 1 COMMENT '版本号',
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后更新时间',
@@ -96,9 +95,21 @@ CREATE TABLE IF NOT EXISTS `cultural_entities` (
   INDEX `idx_entity_type` (`entity_type`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='文化实体表';
 
-ALTER TABLE `cultural_entities`
-  ADD FULLTEXT INDEX `idx_ce_search` (`entity_name`, `description`)
-  WITH PARSER ngram;
+-- 为cultural_entities表添加全文索引（如果不存在）
+SET @index_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.STATISTICS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'cultural_entities' 
+    AND INDEX_NAME = 'idx_ce_search'
+);
+SET @sql = IF(@index_exists = 0,
+    'ALTER TABLE `cultural_entities` ADD FULLTEXT INDEX `idx_ce_search` (`entity_name`, `description`) WITH PARSER ngram',
+    'SELECT "idx_ce_search索引已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
 
 
@@ -110,7 +121,8 @@ CREATE TABLE IF NOT EXISTS `entity_relationships` (
   `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
   `source_entity_id` BIGINT NOT NULL COMMENT '源实体ID',
   `target_entity_id` BIGINT NOT NULL COMMENT '目标实体ID',
-  `relationship_type` VARCHAR(50) NOT NULL COMMENT '关系类型（如：创作、影响、时空、相似、组成）',
+  `relationship_type` VARCHAR(50) NOT NULL COMMENT '关系类型（创作、影响、位于、包含、参与、相似、继承、引用、公布）',
+  `cidoc_property_id` VARCHAR(10) COMMENT 'CIDOC-CRM标准属性代码（如P14, P15, P53, P46, P11, P130, P127, P67, P70等），用于标准化关系类型',
   `relationship_strength` FLOAT COMMENT '关系强度',
   `relationship_evidence` TEXT COMMENT '关系证据（支撑关系的图像或来源）',
   `spatiotemporal_constraint` VARCHAR(255) COMMENT '时空约束',
@@ -242,9 +254,9 @@ CREATE TABLE IF NOT EXISTS `cultural_resources_from_user` (
   `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
   `user_id` BIGINT NOT NULL COMMENT '上传用户ID',
   `title` VARCHAR(255) COMMENT '节日',
-  `resource_type` VARCHAR(50) COMMENT '资源类型（如：文本、图像）',
-  `file_format` VARCHAR(20) COMMENT '文件格式（如：TXT, JPG）',
-  `content_feature_data` LONGTEXT COMMENT '存储文本内容或特征向量的引用',
+  `resource_type` VARCHAR(50) COMMENT '资源类型（文本、图像、视频、数据态资源、虚拟展示资源等。数据态资源：用于AI分析的原始数据集；虚拟展示资源：全景图像、3D模型文件等）',
+  `file_format` VARCHAR(20) COMMENT '文件格式（如：TXT, JPG, MP4, OBJ, GLB等）',
+  `content_feature_data` LONGTEXT COMMENT '存储用于知识图谱构建的实体向量或AI提取的语义特征（数据赋能）',
   `content_hash` VARCHAR(64) COMMENT '内容的SHA-256哈希，用于快速查重',
   `ai_review_status` ENUM('pending', 'passed', 'failed') NOT NULL DEFAULT 'pending' COMMENT 'AI审核状态',
   `manual_review_status` ENUM('pending', 'passed', 'failed') NOT NULL DEFAULT 'pending' COMMENT '人工审核状态',
@@ -265,11 +277,11 @@ CREATE TABLE IF NOT EXISTS `cultural_resources_from_user` (
 CREATE TABLE IF NOT EXISTS `AIGC_cultural_resources` (
   `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
   `title` VARCHAR(255) COMMENT '节日（文化资源涉及到的传统节日的名称）',
-  `resource_type` VARCHAR(50) COMMENT '资源类型（如：文本、图像）',
-  `file_format` VARCHAR(20) COMMENT '文件格式（如：TXT, JPG）',
+  `resource_type` VARCHAR(50) COMMENT '资源类型（文本、图像、视频、数据态资源、虚拟展示资源等。数据态资源：用于AI分析的原始数据集；虚拟展示资源：全景图像、3D模型文件等）',
+  `file_format` VARCHAR(20) COMMENT '文件格式（如：TXT, JPG, MP4, OBJ, GLB等）',
   `source_from` VARCHAR(255) COMMENT '数据来源（例如：AIGC模型名称）',
   `source_url` TEXT COMMENT '原始URL链接 (如果适用)',
-  `content_feature_data` LONGTEXT COMMENT '存储文本内容或特征向量的引用',
+  `content_feature_data` LONGTEXT COMMENT '存储用于知识图谱构建的实体向量或AI提取的语义特征（数据赋能）',
   `version` INT DEFAULT 1 COMMENT '版本号',
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后更新时间'
@@ -335,10 +347,87 @@ CREATE TABLE IF NOT EXISTS `AIGC_cultural_entities` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AIGC生成的文化实体表';
 
 
-ALTER TABLE `AIGC_cultural_entities`
-  ADD FULLTEXT INDEX `idx_ace_search` (`entity_name`, `description`)
-  WITH PARSER ngram;
+-- 为AIGC_cultural_entities表添加全文索引（如果不存在）
+SET @index_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.STATISTICS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'AIGC_cultural_entities' 
+    AND INDEX_NAME = 'idx_ace_search'
+);
+SET @sql = IF(@index_exists = 0,
+    'ALTER TABLE `AIGC_cultural_entities` ADD FULLTEXT INDEX `idx_ace_search` (`entity_name`, `description`) WITH PARSER ngram',
+    'SELECT "idx_ace_search索引已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
+
+-- --------------------------------------------------
+-- 15. 用户评分表 (user_ratings)
+-- 存储用户对文化资源的评分数据
+-- --------------------------------------------------
+CREATE TABLE IF NOT EXISTS `user_ratings` (
+  `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
+  `resource_id` BIGINT NOT NULL COMMENT '关联文化资源ID（对应cultural_resources表id）',
+  `user_id` BIGINT NOT NULL COMMENT '关联用户ID（对应users表id）',
+  `rating` TINYINT NOT NULL COMMENT '评分（1-5分，5分为最佳）',
+  `rating_dimension` VARCHAR(50) DEFAULT 'overall' COMMENT '评分维度（overall：综合评分，accuracy：内容准确性，usefulness：实用性，completeness：完整性）',
+  `rated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '评分时间',
+  -- 唯一约束：同一用户对同一资源的同一维度只能评一次
+  UNIQUE KEY `uk_user_resource_dimension` (`user_id`, `resource_id`, `rating_dimension`),
+  -- 外键关联，删除资源/用户时级联删除评分
+  FOREIGN KEY (`resource_id`) REFERENCES `cultural_resources`(`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+  -- 索引优化查询
+  INDEX `idx_resource_id` (`resource_id`),
+  INDEX `idx_user_id` (`user_id`),
+  INDEX `idx_rating` (`rating`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户评分表';
+
+-- --------------------------------------------------
+-- 16. 用户评论表 (user_comments)
+-- 存储用户对文化资源的评论数据
+-- --------------------------------------------------
+CREATE TABLE IF NOT EXISTS `user_comments` (
+  `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
+  `resource_id` BIGINT NOT NULL COMMENT '关联文化资源ID（对应cultural_resources表id）',
+  `user_id` BIGINT NOT NULL COMMENT '关联用户ID（对应users表id）',
+  `comment_content` TEXT NOT NULL COMMENT '评论内容',
+  `comment_status` VARCHAR(20) DEFAULT 'approved' COMMENT '评论状态（pending：待审核，approved：已通过，rejected：已驳回）',
+  `is_academic_discussion` TINYINT DEFAULT 0 COMMENT '是否学术讨论（0：否，1：是）',
+  `reviewer_id` BIGINT NULL COMMENT '审核人ID（关联users表id，管理员）',
+  `reviewed_at` TIMESTAMP NULL COMMENT '审核时间',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '评论创建时间',
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '评论更新时间',
+  -- 外键关联，删除资源/用户时级联删除评论
+  FOREIGN KEY (`resource_id`) REFERENCES `cultural_resources`(`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`reviewer_id`) REFERENCES `users`(`id`) ON DELETE SET NULL,
+  -- 索引优化查询
+  INDEX `idx_resource_id` (`resource_id`),
+  INDEX `idx_user_id` (`user_id`),
+  INDEX `idx_comment_status` (`comment_status`),
+  INDEX `idx_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户评论表';
+
+-- --------------------------------------------------
+-- 17. 评论回复表 (comment_replies)
+-- 存储用户对评论的回复数据
+-- --------------------------------------------------
+CREATE TABLE IF NOT EXISTS `comment_replies` (
+  `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
+  `comment_id` BIGINT NOT NULL COMMENT '关联评论ID（对应user_comments表id）',
+  `reply_user_id` BIGINT NOT NULL COMMENT '回复用户ID（对应users表id）',
+  `reply_content` TEXT NOT NULL COMMENT '回复内容',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '回复创建时间',
+  -- 外键关联，删除评论/用户时级联删除回复
+  FOREIGN KEY (`comment_id`) REFERENCES `user_comments`(`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`reply_user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+  -- 索引优化查询
+  INDEX `idx_comment_id` (`comment_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='评论回复表';
 
 -- --------------------------------------------------
 -- 创建角色和权限
@@ -433,10 +522,291 @@ CREATE OR REPLACE VIEW v_crawled_images AS SELECT * FROM crawled_images;
 
 
 CREATE OR REPLACE VIEW v_AIGC_cultural_entities AS SELECT * FROM AIGC_cultural_entities;
+-- 新增评论/评分相关视图
+CREATE OR REPLACE VIEW v_user_ratings AS SELECT * FROM user_ratings;
+CREATE OR REPLACE VIEW v_user_comments AS SELECT * FROM user_comments;
+CREATE OR REPLACE VIEW v_comment_replies AS SELECT * FROM comment_replies;
 
 
 
 
+-- --------------------------------------------------
+-- 补充索引（优化查询性能）
+-- --------------------------------------------------
+
+-- qa_sessions表：为user_id添加索引（用于查询用户的会话列表）
+-- 注意：虽然外键会自动创建索引，但显式声明更清晰
+SET @index_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.STATISTICS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'qa_sessions' 
+    AND INDEX_NAME = 'idx_qa_sessions_user_id'
+);
+SET @sql = IF(@index_exists = 0,
+    'CREATE INDEX `idx_qa_sessions_user_id` ON `qa_sessions`(`user_id`)',
+    'SELECT "idx_qa_sessions_user_id索引已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- qa_sessions表：为created_at添加索引（用于按时间排序）
+SET @index_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.STATISTICS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'qa_sessions' 
+    AND INDEX_NAME = 'idx_qa_sessions_created_at'
+);
+SET @sql = IF(@index_exists = 0,
+    'CREATE INDEX `idx_qa_sessions_created_at` ON `qa_sessions`(`created_at`)',
+    'SELECT "idx_qa_sessions_created_at索引已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- cultural_resources_from_user表：为user_id添加索引（用于查询用户上传的资源）
+SET @index_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.STATISTICS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'cultural_resources_from_user' 
+    AND INDEX_NAME = 'idx_crfu_user_id'
+);
+SET @sql = IF(@index_exists = 0,
+    'CREATE INDEX `idx_crfu_user_id` ON `cultural_resources_from_user`(`user_id`)',
+    'SELECT "idx_crfu_user_id索引已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- cultural_resources_from_user表：为upload_time添加索引（用于按时间排序）
+SET @index_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.STATISTICS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'cultural_resources_from_user' 
+    AND INDEX_NAME = 'idx_crfu_upload_time'
+);
+SET @sql = IF(@index_exists = 0,
+    'CREATE INDEX `idx_crfu_upload_time` ON `cultural_resources_from_user`(`upload_time`)',
+    'SELECT "idx_crfu_upload_time索引已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- cultural_resources_from_user表：为审核状态添加索引（用于筛选待审核资源）
+SET @index_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.STATISTICS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'cultural_resources_from_user' 
+    AND INDEX_NAME = 'idx_crfu_ai_review_status'
+);
+SET @sql = IF(@index_exists = 0,
+    'CREATE INDEX `idx_crfu_ai_review_status` ON `cultural_resources_from_user`(`ai_review_status`)',
+    'SELECT "idx_crfu_ai_review_status索引已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @index_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.STATISTICS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'cultural_resources_from_user' 
+    AND INDEX_NAME = 'idx_crfu_manual_review_status'
+);
+SET @sql = IF(@index_exists = 0,
+    'CREATE INDEX `idx_crfu_manual_review_status` ON `cultural_resources_from_user`(`manual_review_status`)',
+    'SELECT "idx_crfu_manual_review_status索引已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- annotation_records表：为reviewer_id添加索引（用于查询审核记录）
+SET @index_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.STATISTICS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'annotation_records' 
+    AND INDEX_NAME = 'idx_ar_reviewer_id'
+);
+SET @sql = IF(@index_exists = 0,
+    'CREATE INDEX `idx_ar_reviewer_id` ON `annotation_records`(`reviewer_id`)',
+    'SELECT "idx_ar_reviewer_id索引已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- annotation_records表：为is_latest添加索引（用于查询最新标注）
+SET @index_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.STATISTICS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'annotation_records' 
+    AND INDEX_NAME = 'idx_ar_is_latest'
+);
+SET @sql = IF(@index_exists = 0,
+    'CREATE INDEX `idx_ar_is_latest` ON `annotation_records`(`is_latest`)',
+    'SELECT "idx_ar_is_latest索引已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- cultural_resources表：为upload_user_id添加索引（虽然外键会自动创建，但显式声明更清晰）
+SET @index_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.STATISTICS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'cultural_resources' 
+    AND INDEX_NAME = 'idx_cr_upload_user_id'
+);
+SET @sql = IF(@index_exists = 0,
+    'CREATE INDEX `idx_cr_upload_user_id` ON `cultural_resources`(`upload_user_id`)',
+    'SELECT "idx_cr_upload_user_id索引已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- cultural_resources表：为审核状态添加索引（用于筛选待审核资源）
+SET @index_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.STATISTICS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'cultural_resources' 
+    AND INDEX_NAME = 'idx_cr_ai_review_status'
+);
+SET @sql = IF(@index_exists = 0,
+    'CREATE INDEX `idx_cr_ai_review_status` ON `cultural_resources`(`ai_review_status`)',
+    'SELECT "idx_cr_ai_review_status索引已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @index_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.STATISTICS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'cultural_resources' 
+    AND INDEX_NAME = 'idx_cr_manual_review_status'
+);
+SET @sql = IF(@index_exists = 0,
+    'CREATE INDEX `idx_cr_manual_review_status` ON `cultural_resources`(`manual_review_status`)',
+    'SELECT "idx_cr_manual_review_status索引已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- comment_replies表：为reply_user_id添加索引（用于查询用户的回复）
+SET @index_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.STATISTICS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'comment_replies' 
+    AND INDEX_NAME = 'idx_cr_reply_user_id'
+);
+SET @sql = IF(@index_exists = 0,
+    'CREATE INDEX `idx_cr_reply_user_id` ON `comment_replies`(`reply_user_id`)',
+    'SELECT "idx_cr_reply_user_id索引已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- qa_messages表：为create_time添加索引（用于按时间排序）
+SET @index_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.STATISTICS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'qa_messages' 
+    AND INDEX_NAME = 'idx_qm_create_time'
+);
+SET @sql = IF(@index_exists = 0,
+    'CREATE INDEX `idx_qm_create_time` ON `qa_messages`(`create_time`)',
+    'SELECT "idx_qm_create_time索引已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- --------------------------------------------------
+-- 添加entity_relationships表的CIDOC字段
+-- --------------------------------------------------
+
+-- 为entity_relationships表添加cidoc_property_id字段（如果不存在）
+SET @column_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.COLUMNS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'entity_relationships' 
+    AND COLUMN_NAME = 'cidoc_property_id'
+);
+SET @sql = IF(@column_exists = 0,
+    'ALTER TABLE `entity_relationships` ADD COLUMN `cidoc_property_id` VARCHAR(10) COMMENT \'CIDOC-CRM标准属性代码（如P14, P62等），用于标准化关系类型\' AFTER `relationship_type`',
+    'SELECT "cidoc_property_id字段已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- 更新现有关系类型的CIDOC代码映射（示例）
+-- 创作 -> P14 (carried out by)
+-- 影响 -> P15 (was influenced by)
+-- 位于 -> P53 (has former or current location)
+-- 包含 -> P46 (is composed of)
+-- 参与 -> P11 (had participant)
+-- 相似 -> P130 (shows features of)
+-- 继承 -> P127 (has broader term)
+-- 引用 -> P67 (refers to)
+-- 公布 -> P70 (documents)
+
+UPDATE `entity_relationships` 
+SET `cidoc_property_id` = 'P14' 
+WHERE `relationship_type` = '创作' AND (`cidoc_property_id` IS NULL OR `cidoc_property_id` = '');
+
+UPDATE `entity_relationships` 
+SET `cidoc_property_id` = 'P15' 
+WHERE `relationship_type` = '影响' AND (`cidoc_property_id` IS NULL OR `cidoc_property_id` = '');
+
+UPDATE `entity_relationships` 
+SET `cidoc_property_id` = 'P53' 
+WHERE `relationship_type` = '位于' AND (`cidoc_property_id` IS NULL OR `cidoc_property_id` = '');
+
+UPDATE `entity_relationships` 
+SET `cidoc_property_id` = 'P46' 
+WHERE `relationship_type` = '包含' AND (`cidoc_property_id` IS NULL OR `cidoc_property_id` = '');
+
+UPDATE `entity_relationships` 
+SET `cidoc_property_id` = 'P11' 
+WHERE `relationship_type` = '参与' AND (`cidoc_property_id` IS NULL OR `cidoc_property_id` = '');
+
+UPDATE `entity_relationships` 
+SET `cidoc_property_id` = 'P130' 
+WHERE `relationship_type` = '相似' AND (`cidoc_property_id` IS NULL OR `cidoc_property_id` = '');
+
+UPDATE `entity_relationships` 
+SET `cidoc_property_id` = 'P127' 
+WHERE `relationship_type` = '继承' AND (`cidoc_property_id` IS NULL OR `cidoc_property_id` = '');
+
+UPDATE `entity_relationships` 
+SET `cidoc_property_id` = 'P67' 
+WHERE `relationship_type` = '引用' AND (`cidoc_property_id` IS NULL OR `cidoc_property_id` = '');
+
+UPDATE `entity_relationships` 
+SET `cidoc_property_id` = 'P70' 
+WHERE `relationship_type` = '公布' AND (`cidoc_property_id` IS NULL OR `cidoc_property_id` = '');
 
 -- --------------------------------------------------
 -- 索引说明
@@ -614,3 +984,32 @@ MODIFY COLUMN `upload_user_id` BIGINT COMMENT '上传用户ID（关联users表�
 ALTER TABLE `cultural_resources` 
 ADD CONSTRAINT `fk_cr_upload_user` 
 FOREIGN KEY (`upload_user_id`) REFERENCES `users`(`id`) ON DELETE SET NULL;
+
+-- --------------------------------------------------
+-- 修改 annotation_records 表
+-- 目的：将 JSON 结构的 annotation_data 扁平化，符合 cultural_entities 的结构标准
+-- --------------------------------------------------
+
+ALTER TABLE `annotation_records`
+    -- 1. 核心标识字段
+    ADD COLUMN `entity_name` VARCHAR(255) COMMENT '实体名称（标注结果，对应 cultural_entities.entity_name）',
+    
+    -- 2. 实体类型（保持与主表一致的 ENUM 定义）
+    ADD COLUMN `entity_type` ENUM('人物', '作品', '事件', '地点', '其他') DEFAULT '其他' COMMENT '实体类型（标注结果）',
+    
+    -- 3. 详细描述与来源
+    ADD COLUMN `description` TEXT COMMENT '描述（标注结果）',
+    ADD COLUMN `source` TEXT COMMENT '来源（标注结果）',
+    
+    -- 4. 时空属性
+    ADD COLUMN `period_era` VARCHAR(100) COMMENT '时期年代（标注结果）',
+    ADD COLUMN `geo_coordinates` VARCHAR(100) COMMENT '地理坐标（标注结果）',
+    ADD COLUMN `cultural_region` VARCHAR(100) COMMENT '文化区域（标注结果）',
+    
+    -- 5. 文化与艺术特征
+    ADD COLUMN `style_features` TEXT COMMENT '风格特征（标注结果）',
+    ADD COLUMN `cultural_value` TEXT COMMENT '文化价值（标注结果）',
+    
+    -- 6. 外部资源链接
+    ADD COLUMN `related_images_url` TEXT COMMENT '相关图像链接（标注结果）',
+    ADD COLUMN `digital_resource_link` TEXT COMMENT '数字资源链接（标注结果）';

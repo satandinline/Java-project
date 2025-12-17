@@ -28,7 +28,7 @@ mysql -u root -p < database_files/init_schema.sql
 
 ## 数据库结构
 
-### 表列表（共14个表）
+### 表列表（共17个表）
 
 1. **users** - 用户表
 2. **cultural_resources** - 文化资源表
@@ -44,6 +44,9 @@ mysql -u root -p < database_files/init_schema.sql
 12. **AIGC_graph** - AIGC生成图像表
 13. **crawled_images** - 爬虫抓取图像表
 14. **AIGC_cultural_entities** - AIGC文化实体表
+15. **user_ratings** - 用户评分表
+16. **user_comments** - 用户评论表
+17. **comment_replies** - 评论回复表
 
 ### ER图
 

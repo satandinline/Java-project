@@ -31,9 +31,19 @@ from aigc_db_helper import save_aigc_text_resource, save_aigc_image, extract_fes
 # 导入父目录的模块
 from login import AuthSystem
 from upload_handler import ResourceUploader
+from user_logging import UserLogging
+
+# 导入统计API（延迟导入，避免循环依赖）
+def register_statistics_api():
+    """注册统计API蓝图"""
+    from statistics_api import statistics_bp
+    app.register_blueprint(statistics_bp)
 
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求
+
+# 注册统计API蓝图
+register_statistics_api()
 
 # 配置静态文件服务
 import os
@@ -397,6 +407,13 @@ def register():
         )
         
         # 如果注册成功且上传了头像，更新数据库中的头像路径
+        # 记录注册日志
+        if result.get('success') and result.get('user_info'):
+            user_id = result['user_info'].get('id')
+            username = result['user_info'].get('username')
+            if user_id and username:
+                UserLogging.log_register(user_id, username)
+        
         if result.get('success') and avatar_path.startswith('/') and avatar_path != '/default.jpg':
             try:
                 from db_connection import get_user_db_connection
@@ -435,6 +452,13 @@ def login():
             return jsonify({'success': False, 'message': '用户名和密码不能为空'}), 400
         
         result = auth_system.login(username, password)
+        
+        # 记录登录日志
+        if result.get('success') and result.get('user_info'):
+            user_id = result['user_info'].get('id')
+            if user_id:
+                UserLogging.log_login(user_id, username)
+        
         return jsonify(result)
     except Exception as e:
         print(f"[API] 登录失败: {e}")
@@ -1022,6 +1046,8 @@ def aigc_chat():
                             image_url=None,
                             db_config=db_config
                         )
+                        # 记录文字AIGC使用日志
+                        UserLogging.log_aigc_text(user_id, final_query)
                     except Exception as save_error:
                         print(f"[API] 保存消息失败: {save_error}")
                 
@@ -1193,6 +1219,8 @@ def aigc_chat():
                                 image_from_users_url=image_from_users_url_json,
                                 db_config=db_config
                             )
+                            # 记录图片AIGC使用日志
+                            UserLogging.log_aigc_image(user_id, final_prompt)
                         except Exception as save_error:
                             print(f"[API] 保存消息失败: {save_error}")
                     
@@ -1536,48 +1564,39 @@ def get_home_resources():
             with conn.cursor() as cursor:
                 resources = []
                 
-                # 1. 从crawled_images表获取图片资源
+                # 1. 从crawled_images表获取图片资源，按节日分组，每个节日只取第一张图片
+                # 首先获取所有图片，按节日名称分组
                 cursor.execute("""
-                    SELECT id, file_name, storage_path, tags, dimensions
+                    SELECT id, file_name, storage_path, tags, dimensions, crawl_time
                     FROM crawled_images
                     ORDER BY crawl_time DESC
-                    LIMIT %s OFFSET %s
-                """, (page_size, (page - 1) * page_size))
+                """)
                 
-                crawled_images = cursor.fetchall()
-                for img in crawled_images:
-                    # 构建图片URL（优先使用storage_path，如果没有则使用file_name）
-                    storage_path = img.get('storage_path')
-                    file_name = img.get('file_name')
-                    
-                    # 确定实际的文件名（storage_path可能包含路径，需要提取文件名）
-                    if storage_path:
-                        # 如果storage_path是完整路径，提取文件名
-                        actual_file = os.path.basename(storage_path) if os.path.sep in storage_path else storage_path
-                    elif file_name:
-                        actual_file = file_name
-                    else:
-                        actual_file = None
-                    
-                    # 构建图片URL
-                    image_url = f"/api/images/crawled/{actual_file}" if actual_file else None
-                    
-                    # 从tags字段提取实体名称（正则匹配第一个汉字到下一个非汉字之前的内容）
+                all_images = cursor.fetchall()
+                
+                # 按节日名称分组，每个节日只保留第一张图片（基准图片，文件名格式为 数字.扩展名）
+                festival_images = {}  # {festival_name: first_image}
+                seen_festivals = set()
+                
+                for img in all_images:
+                    # 从tags字段提取节日名称
+                    festival_name = None
                     entity_name = ""
                     description = ""
+                    
                     if img.get('tags'):
                         try:
                             tags_data = json.loads(img['tags']) if isinstance(img['tags'], str) else img['tags']
                             if isinstance(tags_data, list) and tags_data:
-                                # 从tags列表中提取第一个包含汉字的字符串
+                                # tags的第一个元素通常是节日名称
                                 for tag in tags_data:
                                     if isinstance(tag, str):
-                                        # 匹配第一个汉字到下一个非汉字之前的内容
-                                        # 例如："春节习俗" -> "春节"
+                                        # 匹配第一个汉字到下一个非汉字之前的内容作为节日名称
                                         match = re.search(r'([\u4e00-\u9fa5]+)', tag)
                                         if match:
-                                            entity_name = match.group(1)
-                                            # 提取从第一个汉字开始到下一个非汉字之前的内容作为描述
+                                            festival_name = match.group(1)
+                                            entity_name = festival_name
+                                            # 提取描述
                                             desc_match = re.search(r'([\u4e00-\u9fa5]+[^\u4e00-\u9fa5]*)', tag)
                                             if desc_match:
                                                 description = desc_match.group(1).strip()[:100]
@@ -1588,7 +1607,83 @@ def get_home_resources():
                             print(f"解析tags失败: {e}")
                             pass
                     
-                    # 如果tags中没有找到，使用文件名（去掉扩展名）作为实体名称
+                    # 如果tags中没有找到节日名称，尝试从文件名推断
+                    if not festival_name and img.get('file_name'):
+                        file_name = img['file_name']
+                        # 检查文件名格式：如果是 "8.jpg" 格式，说明是基准图片
+                        # 如果是 "8-1.jpg" 格式，提取基准序号 "8"
+                        base_match = re.match(r'^(\d+)(?:-\d+)?\.', file_name)
+                        if base_match:
+                            base_index = base_match.group(1)
+                            # 如果文件名是 "8.jpg" 格式（没有 -1），说明是基准图片
+                            if not re.match(r'^\d+-\d+\.', file_name):
+                                # 这是基准图片，但如果没有节日名称，使用文件名作为标识
+                                if not festival_name:
+                                    festival_name = f"资源_{base_index}"
+                                    entity_name = festival_name
+                    
+                    # 如果还是没有节日名称，跳过
+                    if not festival_name:
+                        continue
+                    
+                    # 检查文件名格式：只选择基准图片（格式为 数字.扩展名，不是 数字-数字.扩展名）
+                    file_name = img.get('file_name', '')
+                    is_base_image = bool(re.match(r'^\d+\.', file_name))
+                    
+                    # 每个节日只保留第一张基准图片
+                    if is_base_image and festival_name not in seen_festivals:
+                        seen_festivals.add(festival_name)
+                        festival_images[festival_name] = img
+                
+                # 转换为列表并按时间排序
+                festival_list = list(festival_images.values())
+                festival_list.sort(key=lambda x: x.get('crawl_time', ''), reverse=True)
+                
+                # 分页处理
+                total_count = len(festival_list)
+                start_idx = (page - 1) * page_size
+                end_idx = start_idx + page_size
+                paginated_images = festival_list[start_idx:end_idx]
+                
+                # 构建资源列表
+                for img in paginated_images:
+                    # 构建图片URL
+                    storage_path = img.get('storage_path')
+                    file_name = img.get('file_name')
+                    
+                    if storage_path:
+                        actual_file = os.path.basename(storage_path) if os.path.sep in storage_path else storage_path
+                    elif file_name:
+                        actual_file = file_name
+                    else:
+                        actual_file = None
+                    
+                    image_url = f"/api/images/crawled/{actual_file}" if actual_file else None
+                    
+                    # 从tags提取节日名称和描述
+                    entity_name = ""
+                    description = ""
+                    festival_name = None
+                    if img.get('tags'):
+                        try:
+                            tags_data = json.loads(img['tags']) if isinstance(img['tags'], str) else img['tags']
+                            if isinstance(tags_data, list) and tags_data:
+                                for tag in tags_data:
+                                    if isinstance(tag, str):
+                                        match = re.search(r'([\u4e00-\u9fa5]+)', tag)
+                                        if match:
+                                            festival_name = match.group(1)
+                                            entity_name = festival_name
+                                            desc_match = re.search(r'([\u4e00-\u9fa5]+[^\u4e00-\u9fa5]*)', tag)
+                                            if desc_match:
+                                                description = desc_match.group(1).strip()[:100]
+                                            else:
+                                                description = tag[:100] if len(tag) > 100 else tag
+                                            break
+                        except Exception as e:
+                            print(f"解析tags失败: {e}")
+                            pass
+                    
                     if not entity_name and img.get('file_name'):
                         entity_name = os.path.splitext(img['file_name'])[0]
                     
@@ -1598,6 +1693,7 @@ def get_home_resources():
                         'image_url': image_url,
                         'entity_name': entity_name or '未命名资源',
                         'description': description or '暂无简介',
+                        'festival_name': festival_name or entity_name,  # 添加节日名称字段
                         'source': 'crawled_images'
                     })
                 
@@ -1605,8 +1701,8 @@ def get_home_resources():
                 # 计算还需要多少条数据
                 remaining = page_size - len(resources)
                 if remaining > 0:
-                    # 计算偏移量（考虑已经获取的图片数量）
-                    offset = max(0, (page - 1) * page_size - len(crawled_images))
+                    # 计算偏移量（考虑已经获取的节日图片数量）
+                    offset = max(0, (page - 1) * page_size - len(paginated_images))
                     cursor.execute("""
                         SELECT ce.id, ce.entity_name, ce.description, ce.entity_type
                         FROM cultural_entities ce
@@ -1637,12 +1733,10 @@ def get_home_resources():
                             'source': 'cultural_entities'
                         })
                 
-                # 获取总数（只统计crawled_images，因为这是主要资源）
-                cursor.execute("SELECT COUNT(*) as total FROM crawled_images")
-                total_result = cursor.fetchone()
-                total = total_result['total'] if total_result else 0
+                # 获取总数（按节日分组后的数量）
+                total = total_count
                 
-                # 如果图片资源不足，补充统计cultural_entities
+                # 如果节日资源不足，补充统计cultural_entities
                 if total < page_size:
                     cursor.execute("SELECT COUNT(*) as total FROM cultural_entities")
                     total_entities_result = cursor.fetchone()
@@ -1677,6 +1771,135 @@ def get_home_resources():
             'message': f'获取资源失败：{str(e)}',
             'error_type': type(e).__name__
         }), 500
+
+
+@app.route('/api/resource/detail', methods=['GET'])
+def get_resource_detail():
+    """获取资源详情（某个节日的所有图片）"""
+    festival_name = request.args.get('festival_name')
+    if not festival_name:
+        return jsonify({'success': False, 'message': '缺少festival_name参数'}), 400
+    
+    print(f"[API] 收到获取资源详情请求: festival_name={festival_name}")
+    try:
+        import json
+        import os
+        import re
+        
+        # 获取数据库连接
+        from db_connection import get_user_db_connection
+        conn = None
+        try:
+            conn = get_user_db_connection()
+            if not conn:
+                return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        except Exception as db_error:
+            print(f"[API] 数据库连接异常: {db_error}")
+            return jsonify({'success': False, 'message': f'数据库连接异常：{str(db_error)}'}), 500
+        
+        try:
+            with conn.cursor() as cursor:
+                # 查找该节日的所有图片（通过tags字段匹配节日名称）
+                cursor.execute("""
+                    SELECT id, file_name, storage_path, tags, dimensions, crawl_time
+                    FROM crawled_images
+                    WHERE tags LIKE %s
+                    ORDER BY 
+                        CASE 
+                            WHEN file_name REGEXP '^[0-9]+\\.[a-zA-Z]+$' THEN 1
+                            WHEN file_name REGEXP '^[0-9]+-[0-9]+\\.[a-zA-Z]+$' THEN 2
+                            ELSE 3
+                        END,
+                        CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(file_name, '-', 1), '.', 1) AS UNSIGNED),
+                        CASE 
+                            WHEN file_name REGEXP '^[0-9]+-[0-9]+\\.[a-zA-Z]+$' 
+                            THEN CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(file_name, '-', -1), '.', 1) AS UNSIGNED)
+                            ELSE 0
+                        END
+                """, (f'%{festival_name}%',))
+                
+                images = cursor.fetchall()
+                
+                if not images:
+                    return jsonify({
+                        'success': False,
+                        'message': f'未找到节日"{festival_name}"的图片资源'
+                    }), 404
+                
+                # 构建图片列表
+                image_list = []
+                entity_name = festival_name
+                description = ""
+                
+                for img in images:
+                    # 构建图片URL
+                    storage_path = img.get('storage_path')
+                    file_name = img.get('file_name')
+                    
+                    if storage_path:
+                        actual_file = os.path.basename(storage_path) if os.path.sep in storage_path else storage_path
+                    elif file_name:
+                        actual_file = file_name
+                    else:
+                        actual_file = None
+                    
+                    image_url = f"/api/images/crawled/{actual_file}" if actual_file else None
+                    
+                    # 从tags提取描述（只提取一次）
+                    if not description and img.get('tags'):
+                        try:
+                            tags_data = json.loads(img['tags']) if isinstance(img['tags'], str) else img['tags']
+                            if isinstance(tags_data, list) and tags_data:
+                                for tag in tags_data:
+                                    if isinstance(tag, str) and festival_name in tag:
+                                        desc_match = re.search(r'([\u4e00-\u9fa5]+[^\u4e00-\u9fa5]*)', tag)
+                                        if desc_match:
+                                            description = desc_match.group(1).strip()[:200]
+                                        break
+                        except Exception as e:
+                            print(f"解析tags失败: {e}")
+                            pass
+                    
+                    image_list.append({
+                        'id': img['id'],
+                        'file_name': file_name,
+                        'image_url': image_url,
+                        'dimensions': img.get('dimensions'),
+                        'crawl_time': str(img.get('crawl_time', '')) if img.get('crawl_time') else None
+                    })
+                
+                # 尝试从cultural_entities表获取更详细的描述
+                if not description:
+                    cursor.execute("""
+                        SELECT description, entity_type, cultural_value
+                        FROM cultural_entities
+                        WHERE entity_name LIKE %s
+                        LIMIT 1
+                    """, (f'%{festival_name}%',))
+                    entity_info = cursor.fetchone()
+                    if entity_info:
+                        description = entity_info.get('description', '')[:200] or description
+                
+                print(f"[API] 成功获取资源详情: {festival_name}, 共 {len(image_list)} 张图片")
+                return jsonify({
+                    'success': True,
+                    'festival_name': festival_name,
+                    'entity_name': entity_name,
+                    'description': description or '暂无简介',
+                    'images': image_list,
+                    'total_images': len(image_list)
+                })
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except:
+                    pass
+    except Exception as e:
+        print(f"[API] 获取资源详情失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'获取资源详情失败：{str(e)}'}), 500
 
 @app.route('/api/search', methods=['GET'])
 def search_resources():
@@ -2702,9 +2925,12 @@ def get_annotation_details(task_id):
                 if not task:
                     return jsonify({'success': False, 'message': '任务不存在'}), 404
                 
-                # 获取标注记录
+                # 获取标注记录 - 使用新字段结构
                 cursor.execute("""
-                    SELECT annotation_data, annotation_source, created_at
+                    SELECT entity_name, entity_type, description, source,
+                           period_era, geo_coordinates, cultural_region,
+                           style_features, cultural_value, related_images_url, digital_resource_link,
+                           annotation_source, created_at, is_expert_reviewed
                     FROM annotation_records
                     WHERE task_id = %s
                     ORDER BY created_at DESC
@@ -2714,10 +2940,34 @@ def get_annotation_details(task_id):
                 record = cursor.fetchone()
                 annotations = None
                 if record:
-                    try:
-                        annotations = json.loads(record['annotation_data'])
-                    except:
-                        annotations = {"entities": [], "description": "解析失败"}
+                    # 转换为前端需要的格式（兼容旧格式）
+                    annotations = {
+                        "entity_name": record.get('entity_name', ''),
+                        "entity_type": record.get('entity_type', '其他'),
+                        "description": record.get('description', ''),
+                        "source": record.get('source', ''),
+                        "period_era": record.get('period_era', ''),
+                        "geo_coordinates": record.get('geo_coordinates', ''),
+                        "cultural_region": record.get('cultural_region', ''),
+                        "style_features": record.get('style_features', ''),
+                        "cultural_value": record.get('cultural_value', ''),
+                        "related_images_url": record.get('related_images_url', ''),
+                        "digital_resource_link": record.get('digital_resource_link', ''),
+                        # 兼容旧格式：转换为entities数组
+                        "entities": [{
+                            "name": record.get('entity_name', ''),
+                            "type": record.get('entity_type', '其他')
+                        }] if record.get('entity_name') else [],
+                        "is_expert_reviewed": record.get('is_expert_reviewed', False)
+                    }
+                else:
+                    annotations = {
+                        "entity_name": "",
+                        "entity_type": "其他",
+                        "description": "",
+                        "entities": [],
+                        "is_expert_reviewed": False
+                    }
                 
                 # 解析资源内容
                 content_data = json.loads(task['content_feature_data'] or '{}')
@@ -2748,8 +2998,6 @@ def update_annotation(task_id):
             return jsonify({'success': False, 'message': '缺少用户信息'}), 400
         
         data = request.json
-        entities = data.get('entities', [])
-        description = data.get('description', '')
         
         from upload_handler import ResourceUploader
         from login import AuthSystem
@@ -2761,10 +3009,45 @@ def update_annotation(task_id):
         
         uploader = ResourceUploader(user_id=user_id, db_config=user_config['db_config'])
         
-        annotation_data = {
-            "entities": entities,
-            "description": description
-        }
+        # 支持新格式（扁平化字段）和旧格式（entities数组）两种输入
+        if 'entity_name' in data:
+            # 新格式：直接使用
+            annotation_data = data
+        else:
+            # 旧格式：转换为新格式（兼容）
+            entities = data.get('entities', [])
+            description = data.get('description', '')
+            
+            if entities:
+                # 取第一个实体作为主要标注
+                main_entity = entities[0]
+                annotation_data = {
+                    "entity_name": main_entity.get('name', ''),
+                    "entity_type": main_entity.get('type', '其他'),
+                    "description": description,
+                    "source": data.get('source', ''),
+                    "period_era": data.get('period_era', ''),
+                    "geo_coordinates": data.get('geo_coordinates', ''),
+                    "cultural_region": data.get('cultural_region', ''),
+                    "style_features": data.get('style_features', ''),
+                    "cultural_value": data.get('cultural_value', ''),
+                    "related_images_url": data.get('related_images_url', ''),
+                    "digital_resource_link": data.get('digital_resource_link', '')
+                }
+            else:
+                annotation_data = {
+                    "entity_name": "",
+                    "entity_type": "其他",
+                    "description": description,
+                    "source": data.get('source', ''),
+                    "period_era": data.get('period_era', ''),
+                    "geo_coordinates": data.get('geo_coordinates', ''),
+                    "cultural_region": data.get('cultural_region', ''),
+                    "style_features": data.get('style_features', ''),
+                    "cultural_value": data.get('cultural_value', ''),
+                    "related_images_url": data.get('related_images_url', ''),
+                    "digital_resource_link": data.get('digital_resource_link', '')
+                }
         
         result = uploader.save_manual_annotation(task_id, user_id, annotation_data)
         
@@ -2873,6 +3156,122 @@ def serve_public_file(filename):
         return send_from_directory(public_dir, filename)
     else:
         return jsonify({'error': '文件不存在'}), 404
+
+
+@app.route('/api/annotation/tasks/<int:task_id>/approve', methods=['POST'])
+def approve_annotation(task_id):
+    """审核通过标注并迁移数据"""
+    try:
+        user_id = int(request.headers.get('X-User-Id', 0))
+        if not user_id:
+            return jsonify({'success': False, 'message': '缺少用户信息'}), 400
+        
+        from upload_handler import ResourceUploader
+        from login import AuthSystem
+        from db_connection import get_user_db_connection
+        
+        auth_system = AuthSystem()
+        user_config = auth_system.get_user_db_config(user_id)
+        if not user_config:
+            return jsonify({'success': False, 'message': '用户不存在'}), 401
+        
+        # 检查用户权限（只有管理员可以审核）
+        user_info = auth_system.get_user_info(user_id)
+        if not user_info or user_info.get('role') != '管理员':
+            return jsonify({'success': False, 'message': '无权限审核'}), 403
+        
+        uploader = ResourceUploader(user_id=user_id, db_config=user_config['db_config'])
+        
+        # 1. 先标记标注记录为已审核
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor() as cursor:
+                # 更新最新标注记录为已审核
+                cursor.execute("""
+                    UPDATE annotation_records 
+                    SET is_expert_reviewed = TRUE, reviewer_id = %s
+                    WHERE task_id = %s AND is_latest = 1
+                """, (user_id, task_id))
+                
+                if cursor.rowcount == 0:
+                    return jsonify({'success': False, 'message': '未找到标注记录'}), 404
+                
+                conn.commit()
+        finally:
+            conn.close()
+        
+        # 2. 执行数据迁移
+        result = uploader.approve_and_migrate_annotation(task_id, user_id)
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        print(f"[API] 审核标注失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'审核失败: {str(e)}'}), 500
+
+
+@app.route('/api/annotation/tasks/<int:task_id>/reject', methods=['POST'])
+def reject_annotation(task_id):
+    """驳回标注"""
+    try:
+        user_id = int(request.headers.get('X-User-Id', 0))
+        if not user_id:
+            return jsonify({'success': False, 'message': '缺少用户信息'}), 400
+        
+        data = request.json
+        reject_reason = data.get('reason', '')
+        
+        from login import AuthSystem
+        from db_connection import get_user_db_connection
+        
+        auth_system = AuthSystem()
+        user_config = auth_system.get_user_db_config(user_id)
+        if not user_config:
+            return jsonify({'success': False, 'message': '用户不存在'}), 401
+        
+        # 检查用户权限
+        user_info = auth_system.get_user_info(user_id)
+        if not user_info or user_info.get('role') != '管理员':
+            return jsonify({'success': False, 'message': '无权限审核'}), 403
+        
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor() as cursor:
+                # 更新任务状态为已驳回
+                cursor.execute("""
+                    UPDATE annotation_tasks 
+                    SET status = '已驳回'
+                    WHERE id = %s
+                """, (task_id,))
+                
+                # 更新标注记录
+                cursor.execute("""
+                    UPDATE annotation_records 
+                    SET is_expert_reviewed = TRUE, reviewer_id = %s
+                    WHERE task_id = %s AND is_latest = 1
+                """, (user_id, task_id))
+                
+                conn.commit()
+                
+                return jsonify({
+                    'success': True,
+                    'message': '标注已驳回'
+                })
+        finally:
+            conn.close()
+            
+    except Exception as e:
+        print(f"[API] 驳回标注失败: {e}")
+        return jsonify({'success': False, 'message': f'驳回失败: {str(e)}'}), 500
+
 
 if __name__ == '__main__':
     print("=" * 60)

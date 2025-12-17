@@ -111,6 +111,17 @@ erDiagram
         TIMESTAMP created_at
         TINYINT is_latest
         DATETIME create_time
+        VARCHAR entity_name
+        ENUM entity_type
+        TEXT description
+        TEXT source
+        VARCHAR period_era
+        VARCHAR geo_coordinates
+        VARCHAR cultural_region
+        TEXT style_features
+        TEXT cultural_value
+        TEXT related_images_url
+        TEXT digital_resource_link
     }
     
     %% 用户上传资源表
@@ -176,6 +187,37 @@ erDiagram
         JSON tags
     }
     
+    %% 用户评分和评论相关表
+    user_ratings {
+        BIGINT id PK
+        BIGINT resource_id FK
+        BIGINT user_id FK
+        TINYINT rating
+        VARCHAR rating_dimension
+        TIMESTAMP rated_at
+    }
+    
+    user_comments {
+        BIGINT id PK
+        BIGINT resource_id FK
+        BIGINT user_id FK
+        TEXT comment_content
+        VARCHAR comment_status
+        TINYINT is_academic_discussion
+        BIGINT reviewer_id FK
+        TIMESTAMP reviewed_at
+        TIMESTAMP created_at
+        TIMESTAMP updated_at
+    }
+    
+    comment_replies {
+        BIGINT id PK
+        BIGINT comment_id FK
+        BIGINT reply_user_id FK
+        TEXT reply_content
+        TIMESTAMP created_at
+    }
+    
     %% 关系定义
     users ||--o{ cultural_resources : "上传"
     users ||--o{ user_behavior_logs : "产生"
@@ -183,9 +225,17 @@ erDiagram
     users ||--o{ cultural_resources_from_user : "上传"
     users ||--o{ annotation_records : "标注"
     users ||--o{ annotation_records : "审核"
+    users ||--o{ user_ratings : "评分"
+    users ||--o{ user_comments : "评论"
+    users ||--o{ user_comments : "审核"
+    users ||--o{ comment_replies : "回复"
     
     cultural_resources ||--o{ annotation_tasks : "关联"
     cultural_resources ||--o{ cultural_entities : "提取"
+    cultural_resources ||--o{ user_ratings : "被评分"
+    cultural_resources ||--o{ user_comments : "被评论"
+    
+    user_comments ||--o{ comment_replies : "被回复"
     
     cultural_entities ||--o{ entity_relationships : "构建关系"
     entity_relationships }o--|| cultural_entities : "源实体"
@@ -261,6 +311,19 @@ erDiagram
 
 14. **crawled_images** - 爬虫抓取图像表
     - 存储爬虫抓取的图像元数据
+
+### 用户评分和评论相关表
+
+15. **user_ratings** - 用户评分表
+    - 存储用户对文化资源的评分数据
+    - 支持多维度评分（综合、准确性、实用性、完整性）
+
+16. **user_comments** - 用户评论表
+    - 存储用户对文化资源的评论数据
+    - 支持评论审核和学术讨论标记
+
+17. **comment_replies** - 评论回复表
+    - 存储用户对评论的回复数据
 
 ## 重要说明
 

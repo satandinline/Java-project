@@ -153,9 +153,10 @@ FrontEnd/
 - 访问路径：`/default.jpg`
 
 ### 用户头像
-- 后端存储位置：`avatars/` 目录
-- 前端访问路径：`/avatars/{filename}`
-- 通过Vite代理转发到后端服务器
+- 存储位置：`FrontEnd/public/` 目录
+- 命名格式：`{username}.jpg`（如：admin.jpg）
+- 访问路径：`/{username}.jpg`
+- 通过Flask静态文件服务提供
 
 ## 开发说明
 
@@ -232,8 +233,6 @@ npm run preview
 
 在 `vite.config.js` 中配置了以下代理：
 - `/api/*` → `http://localhost:8000` (后端API)
-- `/avatars/*` → `http://localhost:8000` (用户头像)
-- `/default.jpg` → `http://localhost:8000` (默认头像)
 
 ### 环境变量
 

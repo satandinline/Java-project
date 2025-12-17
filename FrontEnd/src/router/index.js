@@ -6,6 +6,7 @@ import ResourceUpload from '../components/ResourceUpload.vue';
 import AnnotationTasks from '../components/AnnotationTasks.vue';
 import SearchView from '../components/SearchView.vue';
 import Login from '../components/Login.vue';
+import ResourceDetail from '../components/ResourceDetail.vue';
 
 const routes = [
   {
@@ -48,6 +49,12 @@ const routes = [
     path: '/search',
     name: 'Search',
     component: SearchView,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/resource/detail',
+    name: 'ResourceDetail',
+    component: ResourceDetail,
     meta: { requiresAuth: true }
   }
 ];

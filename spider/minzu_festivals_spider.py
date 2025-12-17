@@ -48,6 +48,9 @@ class MinzuFestivalsSpider:
         self.db_conn = None
         self.db_cursor = None
         self.current_image_index = 0
+        self.current_festival_base_index = 0  # 当前节日的基准序号
+        self.current_festival_image_count = 0  # 当前节日已保存的图片数量
+        self.current_festival_name = None  # 当前节日的名称
         
         # 数量限制
         self.max_text_items = 20  # 最大文字数据条数
@@ -111,29 +114,36 @@ class MinzuFestivalsSpider:
         """获取当前crawled_images文件夹和数据库中的最大序号"""
         max_index = 0
         
-        # 从文件夹中查找最大序号
+        # 从文件夹中查找最大序号（支持 8.jpg 和 8-1.jpg 格式）
         if os.path.exists(CRAWLED_IMAGES_DIR):
             for filename in os.listdir(CRAWLED_IMAGES_DIR):
                 if filename.endswith(('.jpg', '.jpeg', '.png', '.gif')):
                     try:
-                        # 提取文件名中的数字（如 "1.jpg" -> 1）
+                        # 提取文件名中的数字（支持格式：8.jpg -> 8, 8-1.jpg -> 8）
                         base_name = os.path.splitext(filename)[0]
+                        # 如果是 8-1 格式，提取第一个数字
+                        if '-' in base_name:
+                            base_name = base_name.split('-')[0]
                         if base_name.isdigit():
                             max_index = max(max_index, int(base_name))
                     except:
                         pass
         
-        # 从数据库中查找最大序号
+        # 从数据库中查找最大序号（支持新旧格式）
         try:
+            # 查找所有格式的文件名：8.jpg 或 8-1.jpg
             self.db_cursor.execute("""
                 SELECT file_name FROM crawled_images 
-                WHERE file_name REGEXP '^[0-9]+\\.[a-zA-Z]+$'
-                ORDER BY CAST(SUBSTRING_INDEX(file_name, '.', 1) AS UNSIGNED) DESC
+                WHERE file_name REGEXP '^[0-9]+(-[0-9]+)?\\.[a-zA-Z]+$'
+                ORDER BY CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(file_name, '-', 1), '.', 1) AS UNSIGNED) DESC
                 LIMIT 1
             """)
             result = self.db_cursor.fetchone()
             if result:
                 base_name = os.path.splitext(result['file_name'])[0]
+                # 如果是 8-1 格式，提取第一个数字
+                if '-' in base_name:
+                    base_name = base_name.split('-')[0]
                 if base_name.isdigit():
                     max_index = max(max_index, int(base_name))
         except Exception as e:
@@ -142,17 +152,29 @@ class MinzuFestivalsSpider:
         self.current_image_index = max_index
         print(f"当前最大图片序号: {self.current_image_index}")
     
-    def _get_next_image_name(self, image_url):
-        """获取下一个图片文件名"""
-        self.current_image_index += 1
-        
+    def _get_next_image_name(self, image_url, is_same_festival=False):
+        """
+        获取下一个图片文件名
+        :param image_url: 图片URL
+        :param is_same_festival: 是否是同一节日的后续图片
+        :return: 文件名，如 "8.jpg" 或 "8-1.jpg", "8-2.jpg"
+        """
         # 根据URL确定文件扩展名
         parsed_url = urlparse(image_url)
         ext = os.path.splitext(parsed_url.path)[1].lower()
         if not ext or ext not in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
             ext = '.jpg'  # 默认使用jpg
         
-        return f"{self.current_image_index}{ext}"
+        if is_same_festival and self.current_festival_base_index > 0:
+            # 同一节日的后续图片，使用 基准序号-序号 格式
+            self.current_festival_image_count += 1
+            return f"{self.current_festival_base_index}-{self.current_festival_image_count}{ext}"
+        else:
+            # 新节日的第一张图片，使用新的基准序号
+            self.current_image_index += 1
+            self.current_festival_base_index = self.current_image_index
+            self.current_festival_image_count = 0
+            return f"{self.current_image_index}{ext}"
     
     def _is_meaningful_image(self, image_path):
         """
@@ -633,13 +655,31 @@ class MinzuFestivalsSpider:
             if self.image_items_count < self.max_image_items:
                 images = self._extract_images_from_page(html_content, url)
                 
+                # 确定当前节日的名称（用于关联图片）
+                # 优先使用resource_title，如果没有则从tags中提取
+                current_festival = None
+                if resource_title:
+                    # 从标题中提取节日名称
+                    festival_names = self._extract_festival_names(resource_title)
+                    if festival_names:
+                        current_festival = festival_names[0]
+                
+                # 如果是新节日，重置计数器
+                if current_festival != self.current_festival_name:
+                    self.current_festival_name = current_festival
+                    self.current_festival_base_index = 0  # 将在_get_next_image_name中设置
+                    self.current_festival_image_count = 0
+                
                 # 下载并保存图片
+                is_first_image = True
                 for img_info in images:
                     if self.image_items_count >= self.max_image_items:
                         break
                     
                     image_url = img_info['url']
-                    file_name = self._get_next_image_name(image_url)
+                    # 第一张图片使用新序号，后续图片使用 序号-1, 序号-2 格式
+                    is_same_festival = not is_first_image and current_festival == self.current_festival_name
+                    file_name = self._get_next_image_name(image_url, is_same_festival=is_same_festival)
                     file_path, dimensions = self._download_image(image_url, file_name)
                     
                     if file_path:
@@ -648,10 +688,16 @@ class MinzuFestivalsSpider:
                         if img_info.get('alt'):
                             tags.append(img_info['alt'])
                         
+                        # 添加节日名称到tags中（如果存在）
+                        if current_festival:
+                            if current_festival not in tags:
+                                tags.insert(0, current_festival)  # 将节日名称放在最前面
+                        
                         # 保存到数据库
                         storage_path = f"crawled_images/{file_name}"
                         if self._save_to_database(file_name, storage_path, dimensions, tags):
-                            print(f"已保存图片: {file_name} (序号: {self.current_image_index}, 图片数据: {self.image_items_count}/{self.max_image_items})")
+                            print(f"已保存图片: {file_name} (节日: {current_festival or '未知'}, 图片数据: {self.image_items_count}/{self.max_image_items})")
+                            is_first_image = False
             
             # 提取链接，继续爬取（如果未达到限制）
             links = []

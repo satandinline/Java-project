@@ -1,7 +1,5 @@
 import os
-import uuid
 import json
-import random
 from datetime import datetime
 from typing import Optional, Dict, Any
 import pymysql
@@ -73,9 +71,47 @@ class ResourceUploader:
         # 更新实例的user_id，确保使用正确的用户ID
         self.user_id = user_id
         
-        # 生成唯一文件名
-        unique_filename = f"{uuid.uuid4()}_{file_name}"
+        # 获取上传时间
+        upload_datetime = datetime.now()
+        date_str = upload_datetime.strftime("%Y-%m-%d")
+        time_str = upload_datetime.strftime("%H-%M-%S")
+        
+        # 获取用户名
+        conn_temp = None
+        username = "unknown"
+        try:
+            conn_temp = self._get_db_connection()
+            if conn_temp:
+                with conn_temp.cursor() as cursor:
+                    cursor.execute("SELECT username FROM users WHERE id = %s", (user_id,))
+                    user_result = cursor.fetchone()
+                    if user_result:
+                        username = user_result['username']
+        except Exception as e:
+            print(f"获取用户名失败: {e}")
+        finally:
+            if conn_temp:
+                conn_temp.close()
+        
+        # 清理用户名中的特殊字符，只保留字母、数字、下划线和连字符
+        import re
+        safe_username = re.sub(r'[^\w\-]', '_', username)
+        
+        # 获取文件扩展名
+        file_ext = os.path.splitext(file_name)[1] if '.' in file_name else ''
+        
+        # 生成文件名：用户名-日期-时间.扩展名
+        # 如果同一用户在同一秒上传多个文件，添加序号确保唯一性
+        base_filename = f"{safe_username}-{date_str}-{time_str}"
+        unique_filename = f"{base_filename}{file_ext}"
         file_path = os.path.join(self.upload_dir, unique_filename)
+        
+        # 如果文件已存在，添加序号
+        counter = 1
+        while os.path.exists(file_path):
+            unique_filename = f"{base_filename}-{counter}{file_ext}"
+            file_path = os.path.join(self.upload_dir, unique_filename)
+            counter += 1
         
         # 保存文件
         with open(file_path, 'wb') as f:
@@ -130,6 +166,16 @@ class ResourceUploader:
                     festival_title_en = extract_and_convert_festival_name(file_name)
                 
                 # 插入用户上传资源表（title字段存储英文节日名称）
+                # content_feature_data中保存原始文件名和新文件名，便于展示和排序
+                content_feature_data = {
+                    "original_file_name": file_name,  # 原始文件名
+                    "stored_file_name": unique_filename,  # 存储的文件名（新格式）
+                    "username": username,  # 用户名
+                    "upload_date": date_str,  # 上传日期
+                    "upload_time": time_str,  # 上传时间
+                    "content_preview": content_text[:500] if content_text else ""
+                }
+                
                 cursor.execute("""
                     INSERT INTO cultural_resources_from_user 
                     (user_id, title, resource_type, file_format, content_feature_data,
@@ -140,9 +186,9 @@ class ResourceUploader:
                     festival_title_en,  # title字段存储英文节日名称
                     resource_type,
                     file_name.split('.')[-1] if '.' in file_name else '',
-                    json.dumps({"file_name": file_name, "content_preview": content_text[:500]}, ensure_ascii=False) if content_text else '{}',
+                    json.dumps(content_feature_data, ensure_ascii=False),
                     content_hash,  # 存储哈希值用于后续查重
-                    datetime.now(),  # 上传时间
+                    upload_datetime,  # 上传时间
                     'pending',  # 初始AI审核状态
                     'pending'   # 初始人工审核状态
                 ))
@@ -160,16 +206,8 @@ class ResourceUploader:
                 
                 # 记录用户行为日志（上传行为属于"交互"类型）
                 try:
-                    cursor.execute("""
-                        INSERT INTO user_behavior_logs 
-                        (user_id, behavior_type, content, timestamp)
-                        VALUES (%s, %s, %s, NOW())
-                    """, (
-                        user_id,
-                        '交互',
-                        f"上传资源：{file_name}（类型：{resource_type}）"
-                    ))
-                    conn.commit()
+                    from user_logging import UserLogging
+                    UserLogging.log_upload(user_id, file_name, resource_type)
                 except Exception as e:
                     print(f"记录用户行为日志失败: {e}")
                     # 不影响主流程，继续执行
@@ -338,30 +376,81 @@ class ResourceUploader:
                     
                     try:
                         with conn.cursor() as cursor:
-                            # 保存标注结果
-                            annotation_result = {
-                                "entities": entities,
-                                "description": f"AI自动标注 (模型: qwen-turbo)",
-                                "timestamp": str(datetime.now())
-                            }
-                            
-                            cursor.execute("""
-                                UPDATE annotation_tasks 
-                                SET status = %s 
-                                WHERE id = %s
-                            """, ('已标注', task_id))
-                            
-                            cursor.execute("""
-                                INSERT INTO annotation_records 
-                                (task_id, annotator_id, annotation_data, annotation_source, is_expert_reviewed)
-                                VALUES (%s, %s, %s, %s, %s)
-                            """, (
-                                task_id,
-                                -1,  # -1表示AI标注
-                                json.dumps(annotation_result, ensure_ascii=False),
-                                'ai',
-                                False
-                            ))
+                            # 保存标注结果 - 使用扁平化字段
+                            # 从entities列表中提取第一个实体作为主要实体（如果有多个实体，可以创建多条记录）
+                            if entities:
+                                # 取第一个实体作为主要标注结果
+                                main_entity = entities[0]
+                                entity_name = main_entity.get('name', '')
+                                entity_type = main_entity.get('type', '其他')
+                                
+                                # 构建描述信息（包含所有识别的实体）
+                                all_entities_text = ', '.join([e.get('name', '') for e in entities])
+                                description = f"AI自动标注 (模型: qwen-turbo)。识别到实体: {all_entities_text}"
+                                
+                                # 更新任务状态
+                                cursor.execute("""
+                                    UPDATE annotation_tasks 
+                                    SET status = %s 
+                                    WHERE id = %s
+                                """, ('已标注', task_id))
+                                
+                                # 保存标注记录 - 使用新字段结构
+                                cursor.execute("""
+                                    INSERT INTO annotation_records 
+                                    (task_id, annotator_id, annotation_source, is_expert_reviewed,
+                                     entity_name, entity_type, description)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                """, (
+                                    task_id,
+                                    -1,  # -1表示AI标注
+                                    'ai',
+                                    False,
+                                    entity_name,
+                                    entity_type,
+                                    description
+                                ))
+                                
+                                # 如果有多个实体，为每个实体创建一条记录
+                                for entity in entities[1:]:
+                                    entity_name = entity.get('name', '')
+                                    entity_type = entity.get('type', '其他')
+                                    cursor.execute("""
+                                        INSERT INTO annotation_records 
+                                        (task_id, annotator_id, annotation_source, is_expert_reviewed,
+                                         entity_name, entity_type, description)
+                                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                    """, (
+                                        task_id,
+                                        -1,
+                                        'ai',
+                                        False,
+                                        entity_name,
+                                        entity_type,
+                                        f"AI自动标注 (模型: qwen-turbo)"
+                                    ))
+                            else:
+                                # 如果没有识别到实体，创建一条默认记录
+                                cursor.execute("""
+                                    UPDATE annotation_tasks 
+                                    SET status = %s 
+                                    WHERE id = %s
+                                """, ('已标注', task_id))
+                                
+                                cursor.execute("""
+                                    INSERT INTO annotation_records 
+                                    (task_id, annotator_id, annotation_source, is_expert_reviewed,
+                                     entity_name, entity_type, description)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                """, (
+                                    task_id,
+                                    -1,
+                                    'ai',
+                                    False,
+                                    '未识别到实体',
+                                    '其他',
+                                    'AI自动标注 (模型: qwen-turbo)：未识别到实体'
+                                ))
                             
                             conn.commit()
                             print(f"[AI标注] 任务{task_id}: 标注完成，识别{len(entities)}个实体")
@@ -447,6 +536,8 @@ class ResourceUploader:
         conn = None
         try:
             conn = self._get_db_connection()
+            if not conn:
+                return {"success": False, "message": "数据库连接失败"}
             with conn.cursor() as cursor:
                 # 更新任务状态
                 cursor.execute("""
@@ -455,18 +546,72 @@ class ResourceUploader:
                     WHERE id = %s
                 """, ('已标注', 'manual', task_id))
                 
-                # 保存人工标注记录
-                cursor.execute("""
-                    INSERT INTO annotation_records 
-                    (task_id, annotator_id, annotation_data, annotation_source, is_expert_reviewed)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (
-                    task_id,
-                    user_id,
-                    json.dumps(annotation_data, ensure_ascii=False),
-                    'manual',
-                    False  # 默认为非专家审核
-                ))
+                # 保存人工标注记录 - 使用扁平化字段
+                # 从annotation_data中提取字段
+                entities = annotation_data.get('entities', [])
+                description = annotation_data.get('description', '')
+
+                # 如果annotation_data包含新字段结构，直接使用
+                if 'entity_name' in annotation_data:
+                    # 新格式：直接使用扁平化字段
+                    cursor.execute("""
+                        INSERT INTO annotation_records 
+                        (task_id, annotator_id, annotation_source, is_expert_reviewed,
+                         entity_name, entity_type, description, source,
+                         period_era, geo_coordinates, cultural_region,
+                         style_features, cultural_value, related_images_url, digital_resource_link)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        task_id,
+                        user_id,
+                        'manual',
+                        False,
+                        annotation_data.get('entity_name', ''),
+                        annotation_data.get('entity_type', '其他'),
+                        annotation_data.get('description', ''),
+                        annotation_data.get('source', ''),
+                        annotation_data.get('period_era', ''),
+                        annotation_data.get('geo_coordinates', ''),
+                        annotation_data.get('cultural_region', ''),
+                        annotation_data.get('style_features', ''),
+                        annotation_data.get('cultural_value', ''),
+                        annotation_data.get('related_images_url', ''),
+                        annotation_data.get('digital_resource_link', '')
+                    ))
+                elif entities:
+                    # 旧格式：从entities数组中提取（兼容旧代码）
+                    # 为每个实体创建一条记录
+                    for entity in entities:
+                        cursor.execute("""
+                            INSERT INTO annotation_records 
+                            (task_id, annotator_id, annotation_source, is_expert_reviewed,
+                             entity_name, entity_type, description)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """, (
+                            task_id,
+                            user_id,
+                            'manual',
+                            False,
+                            entity.get('name', ''),
+                            entity.get('type', '其他'),
+                            description or f"人工标注：{entity.get('name', '')}"
+                        ))
+                else:
+                    # 如果没有实体信息，创建一条默认记录
+                    cursor.execute("""
+                        INSERT INTO annotation_records 
+                        (task_id, annotator_id, annotation_source, is_expert_reviewed,
+                         entity_name, entity_type, description)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        task_id,
+                        user_id,
+                        'manual',
+                        False,
+                        '未指定实体',
+                        '其他',
+                        description or '人工标注'
+                    ))
                 
                 conn.commit()
                 
@@ -505,6 +650,8 @@ class ResourceUploader:
         conn = None
         try:
             conn = self._get_db_connection()
+            if not conn:
+                return {"success": False, "message": "数据库连接失败"}
             with conn.cursor() as cursor:
                 # 管理员可以看到所有任务，普通用户只能看到自己上传的
                 cursor.execute("SELECT role FROM users WHERE id = %s", (user_id,))
@@ -518,7 +665,8 @@ class ResourceUploader:
                 query = """
                     SELECT t.id, t.resource_id, t.resource_source, t.task_type, t.status, t.annotation_method,
                            COALESCE(cru.title, cr.title) as title,
-                           COALESCE(cru.resource_type, cr.resource_type) as resource_type
+                           COALESCE(cru.resource_type, cr.resource_type) as resource_type,
+                           cru.content_feature_data, cru.upload_time
                     FROM annotation_tasks t
                     LEFT JOIN cultural_resources_from_user cru 
                         ON t.resource_id = cru.id AND t.resource_source = 'cultural_resources_from_user'
@@ -544,9 +692,189 @@ class ResourceUploader:
                 cursor.execute(query, params)
                 tasks = cursor.fetchall()
                 
-                return {"success": True, "tasks": tasks}
+                # 处理任务数据，添加文件名信息（对于用户上传的资源）
+                processed_tasks = []
+                for task in tasks:
+                    task_dict = dict(task)
+                    # 如果是用户上传的资源，从content_feature_data中提取文件名信息
+                    if task_dict.get('resource_source') == 'cultural_resources_from_user' and task_dict.get('content_feature_data'):
+                        try:
+                            content_data = json.loads(task_dict['content_feature_data'] or '{}')
+                            # 添加文件名信息，便于前端展示和排序
+                            task_dict['file_name'] = content_data.get('stored_file_name') or content_data.get('file_name', '')
+                            task_dict['original_file_name'] = content_data.get('original_file_name', '')
+                            task_dict['upload_username'] = content_data.get('username', '')
+                            task_dict['upload_date'] = content_data.get('upload_date', '')
+                            task_dict['upload_time'] = content_data.get('upload_time', '')
+                        except:
+                            pass
+                    processed_tasks.append(task_dict)
+                
+                return {"success": True, "tasks": processed_tasks}
         except Exception as e:
             return {"success": False, "message": f"获取任务失败: {str(e)}"}
+        finally:
+            if conn:
+                conn.close()
+
+    def approve_and_migrate_annotation(self, task_id: int, reviewer_id: int) -> Dict[str, Any]:
+        """
+        审核通过标注并迁移数据到正式表
+        :param task_id: 标注任务ID
+        :param reviewer_id: 审核者ID
+        :return: 迁移结果
+        """
+        conn = None
+        try:
+            conn = self._get_db_connection()
+            if not conn:
+                return {
+                    "success": False,
+                    "message": "数据库连接失败"
+                }
+            
+            with conn.cursor() as cursor:
+                # 1. 获取任务信息
+                cursor.execute("""
+                    SELECT t.resource_id, t.resource_source, t.task_type,
+                           cru.resource_type, cru.title, cru.content_feature_data,
+                           cru.file_format
+                    FROM annotation_tasks t
+                    LEFT JOIN cultural_resources_from_user cru 
+                        ON t.resource_id = cru.id 
+                        AND t.resource_source = 'cultural_resources_from_user'
+                    LEFT JOIN cultural_resources cr 
+                        ON t.resource_id = cr.id 
+                        AND t.resource_source = 'cultural_resources'
+                    WHERE t.id = %s
+                """, (task_id,))
+                
+                task_info = cursor.fetchone()
+                if not task_info:
+                    return {
+                        "success": False,
+                        "message": "任务不存在"
+                    }
+                
+                # 2. 获取最新的标注记录（已审核通过的）
+                cursor.execute("""
+                    SELECT entity_name, entity_type, description, source,
+                           period_era, geo_coordinates, cultural_region,
+                           style_features, cultural_value, related_images_url, digital_resource_link
+                    FROM annotation_records
+                    WHERE task_id = %s AND is_expert_reviewed = TRUE
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """, (task_id,))
+                
+                annotation = cursor.fetchone()
+                if not annotation:
+                    return {
+                        "success": False,
+                        "message": "未找到已审核的标注记录"
+                    }
+                
+                # 3. 根据任务类型迁移到不同表
+                task_type = task_info['task_type']
+                migrated_ids = []
+                
+                if task_type == '实体':
+                    # 迁移到 cultural_entities 表
+                    cursor.execute("""
+                        INSERT INTO cultural_entities 
+                        (entity_name, entity_type, description, source,
+                         period_era, geo_coordinates, cultural_region,
+                         style_features, cultural_value, related_images_url, digital_resource_link)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        annotation['entity_name'],
+                        annotation['entity_type'],
+                        annotation['description'],
+                        annotation['source'],
+                        annotation['period_era'],
+                        annotation['geo_coordinates'],
+                        annotation['cultural_region'],
+                        annotation['style_features'],
+                        annotation['cultural_value'],
+                        annotation['related_images_url'],
+                        annotation['digital_resource_link']
+                    ))
+                    entity_id = cursor.lastrowid
+                    migrated_ids.append(('cultural_entities', entity_id))
+                
+                # 4. 如果资源来源是 cultural_resources_from_user，迁移资源到 cultural_resources
+                if task_info['resource_source'] == 'cultural_resources_from_user':
+                    content_data = json.loads(task_info['content_feature_data'] or '{}')
+                    
+                    cursor.execute("""
+                        INSERT INTO cultural_resources 
+                        (title, resource_type, file_format, source_from,
+                         content_feature_data, upload_user_id, ai_review_status, manual_review_status)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        task_info['title'],
+                        task_info['resource_type'],
+                        task_info['file_format'],
+                        '用户上传',
+                        task_info['content_feature_data'],
+                        self.user_id,
+                        'passed',
+                        'passed'
+                    ))
+                    resource_id = cursor.lastrowid
+                    migrated_ids.append(('cultural_resources', resource_id))
+                    
+                    # 更新原资源表的审核状态
+                    cursor.execute("""
+                        UPDATE cultural_resources_from_user 
+                        SET ai_review_status = 'passed', manual_review_status = 'passed'
+                        WHERE id = %s
+                    """, (task_info['resource_id'],))
+                
+                # 5. 如果是图像资源，还需要迁移到图片表
+                if task_info['resource_type'] == '图像':
+                    # 从content_feature_data中获取文件路径
+                    content_data = json.loads(task_info['content_feature_data'] or '{}')
+                    # 优先使用新格式的stored_file_name，如果没有则使用original_file_name（兼容旧数据）
+                    file_name = content_data.get('stored_file_name') or content_data.get('file_name', '')
+                    
+                    # 确定存储路径（需要根据实际文件存储逻辑调整）
+                    storage_path = f"uploads/{file_name}"
+                    
+                    cursor.execute("""
+                        INSERT INTO crawled_images 
+                        (file_name, storage_path, tags)
+                        VALUES (%s, %s, %s)
+                    """, (
+                        file_name,
+                        storage_path,
+                        json.dumps([annotation['entity_name']], ensure_ascii=False)
+                    ))
+                    image_id = cursor.lastrowid
+                    migrated_ids.append(('crawled_images', image_id))
+                
+                # 6. 更新任务状态为已完成
+                cursor.execute("""
+                    UPDATE annotation_tasks 
+                    SET status = '已完成'
+                    WHERE id = %s
+                """, (task_id,))
+                
+                conn.commit()
+                
+                return {
+                    "success": True,
+                    "message": "标注审核通过，数据已迁移",
+                    "migrated": migrated_ids
+                }
+                
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            return {
+                "success": False,
+                "message": f"迁移失败: {str(e)}"
+            }
         finally:
             if conn:
                 conn.close()

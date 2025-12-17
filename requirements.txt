@@ -37,6 +37,7 @@ python-dotenv>=0.19.0
 
 # 数据处理
 pandas>=1.5.0
+numpy>=1.21.0
 tqdm>=4.64.0
 
 # AI模型SDK

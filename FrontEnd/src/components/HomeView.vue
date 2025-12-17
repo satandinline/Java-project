@@ -50,7 +50,12 @@
     <!-- 底部资源卡片 -->
     <div class="resources-section">
       <div class="resource-grid">
-        <div class="resource-item" v-for="item in resourceList" :key="item.id">
+        <div 
+          class="resource-item" 
+          v-for="item in resourceList" 
+          :key="item.id"
+          @click="goToResourceDetail(item)"
+        >
           <div class="res-img-container">
             <!-- 注意：搜索接口目前可能没有图片，会显示暂无图片 -->
             <img 
@@ -196,6 +201,20 @@ const handleSearchAI = () => {
     path: '/search',
     query: { q, mode: 'ai' }
   });
+};
+
+// 跳转到资源详情页
+const goToResourceDetail = (item) => {
+  const festivalName = item.festival_name || item.entity_name;
+  if (festivalName) {
+    router.push({
+      path: '/resource/detail',
+      query: { 
+        festival_name: festivalName,
+        entity_name: item.entity_name 
+      }
+    });
+  }
 };
 
 // ==================== 原有分页逻辑 (保持不变) ====================
@@ -367,6 +386,8 @@ onMounted(async () => {
   overflow: hidden;
   box-shadow: 0 2px 8px rgba(0,0,0,0.08);
   border: 1px solid #f0f0f0;
+  cursor: pointer;
+  transition: transform 0.3s, box-shadow 0.3s, border-color 0.3s;
   cursor: pointer;
   transition: all 0.3s ease;
   display: flex;
