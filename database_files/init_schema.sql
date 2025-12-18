@@ -31,14 +31,15 @@ SET NAMES utf8mb4;
 -- --------------------------------------------------
 CREATE TABLE IF NOT EXISTS `users` (
   `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
-  `username` VARCHAR(100) UNIQUE NOT NULL COMMENT '用户名',
+  `account` VARCHAR(20) UNIQUE NOT NULL COMMENT '用户账号（8-10位数字，系统自动生成，永久不可修改）',
   `password_hash` VARCHAR(255) NOT NULL COMMENT '加密后的密码',
   `role` ENUM('普通用户', '管理员') NOT NULL DEFAULT '普通用户' COMMENT '角色（普通用户或系统管理员）',
-  `nickname` VARCHAR(100) COMMENT '用户昵称',
-  `avatar_path` VARCHAR(255) DEFAULT '/default.jpg' COMMENT '头像路径（存储在public文件夹，格式：/用户名.jpg 或 /default.jpg）',
+  `nickname` VARCHAR(100) COMMENT '用户昵称（可修改）',
+  `avatar_path` VARCHAR(255) DEFAULT '/default.jpg' COMMENT '头像路径（存储在public文件夹，格式：/账号.jpg 或 /default.jpg）',
   `security_question` VARCHAR(255) COMMENT '自定义安全问题（用于找回密码）',
   `security_answer_hash` VARCHAR(255) COMMENT '安全问题的答案（哈希值）',
-  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '注册时间'
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '注册时间',
+  INDEX `idx_account` (`account`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
 
 
@@ -311,14 +312,25 @@ CREATE TABLE IF NOT EXISTS `AIGC_graph` (
 -- --------------------------------------------------
 -- 13. 爬虫抓取图像表 (crawled_images)
 -- 存储爬虫抓取的图像元数据
+-- 注意：storage_path不设置UNIQUE约束，因为多个资源可能共享default.jpg
+-- 实际爬取的图片通过递增序号保证路径唯一性（如crawled_images/1.jpg, crawled_images/2.jpg等）
 -- --------------------------------------------------
 CREATE TABLE IF NOT EXISTS `crawled_images` (
   `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
   `file_name` VARCHAR(255) NOT NULL COMMENT '文件名',
-  `storage_path` VARCHAR(767) NOT NULL UNIQUE COMMENT '存储路径',
+  `storage_path` VARCHAR(767) NOT NULL COMMENT '存储路径（实际图片如crawled_images/1.jpg，默认图片为FrontEnd/public/default.jpg）',
   `dimensions` VARCHAR(50) COMMENT '尺寸 (例如: 1024x1024)',
   `crawl_time` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '抓取时间',
-  `tags` JSON COMMENT '标签 (使用JSON数组格式, e.g., ["京剧", "脸谱"])'
+  `tags` JSON COMMENT '标签 (使用JSON数组格式, e.g., ["京剧", "脸谱"])',
+  `resource_id` BIGINT COMMENT '关联的文化资源ID（对应cultural_resources表id，如果该图片属于某个文字资源）',
+  `entity_id` BIGINT COMMENT '关联的文化实体ID（对应cultural_entities表id，如果该图片属于某个文化实体）',
+  `festival_name` VARCHAR(255) COMMENT '关联的节日名称（中文，用于快速查询和关联）',
+  INDEX `idx_resource_id` (`resource_id`),
+  INDEX `idx_entity_id` (`entity_id`),
+  INDEX `idx_festival_name` (`festival_name`),
+  INDEX `idx_storage_path` (`storage_path`),
+  CONSTRAINT `fk_ci_resource` FOREIGN KEY (`resource_id`) REFERENCES `cultural_resources`(`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_ci_entity` FOREIGN KEY (`entity_id`) REFERENCES `cultural_entities`(`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='爬虫抓取图像元数据表';
 
 
@@ -430,6 +442,65 @@ CREATE TABLE IF NOT EXISTS `comment_replies` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='评论回复表';
 
 -- --------------------------------------------------
+-- 18. 评论点赞表 (comment_likes)
+-- 存储用户对评论的点赞数据
+-- --------------------------------------------------
+CREATE TABLE IF NOT EXISTS `comment_likes` (
+  `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
+  `comment_id` BIGINT NOT NULL COMMENT '关联评论ID（对应user_comments表id）',
+  `user_id` BIGINT NOT NULL COMMENT '点赞用户ID（对应users表id）',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '点赞时间',
+  -- 外键关联，删除评论/用户时级联删除点赞
+  FOREIGN KEY (`comment_id`) REFERENCES `user_comments`(`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+  -- 唯一索引，防止重复点赞
+  UNIQUE KEY `uk_comment_user` (`comment_id`, `user_id`),
+  -- 索引优化查询
+  INDEX `idx_comment_id` (`comment_id`),
+  INDEX `idx_user_id` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='评论点赞表';
+
+-- --------------------------------------------------
+-- 19. 消息通知表 (notifications)
+-- 存储用户收到的消息通知（点赞、回复等）
+-- --------------------------------------------------
+CREATE TABLE IF NOT EXISTS `notifications` (
+  `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
+  `user_id` BIGINT NOT NULL COMMENT '接收通知的用户ID（对应users表id）',
+  `notification_type` VARCHAR(50) NOT NULL COMMENT '通知类型（like：点赞，reply：回复）',
+  `content` TEXT COMMENT '通知内容',
+  `related_id` BIGINT COMMENT '关联ID（如评论ID）',
+  `is_read` TINYINT(1) DEFAULT 0 COMMENT '是否已读（0：未读，1：已读）',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '通知创建时间',
+  -- 外键关联，删除用户时级联删除通知
+  FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+  -- 索引优化查询
+  INDEX `idx_user_id` (`user_id`),
+  INDEX `idx_is_read` (`is_read`),
+  INDEX `idx_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='消息通知表';
+
+-- --------------------------------------------------
+-- 20. 用户访问日志表 (user_access_logs)
+-- 记录所有用户的访问行为（包括管理员），用于数据大屏统计
+-- --------------------------------------------------
+CREATE TABLE IF NOT EXISTS `user_access_logs` (
+  `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
+  `user_id` BIGINT NOT NULL COMMENT '用户ID（包括管理员）',
+  `access_type` VARCHAR(50) NOT NULL COMMENT '访问类型（page_view：页面访问，aigc_text：文字AIGC，aigc_image：图片AIGC，search：搜索，upload：上传等）',
+  `resource_id` BIGINT COMMENT '关联资源ID（可选）',
+  `resource_type` VARCHAR(50) COMMENT '资源类型（可选）',
+  `access_path` VARCHAR(500) COMMENT '访问路径（如：/aigc, /search等）',
+  `access_time` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '访问时间',
+  -- 外键关联，删除用户时级联删除日志
+  FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+  -- 索引优化查询
+  INDEX `idx_user_id` (`user_id`),
+  INDEX `idx_access_type` (`access_type`),
+  INDEX `idx_access_time` (`access_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户访问日志表';
+
+-- --------------------------------------------------
 -- 创建角色和权限
 -- --------------------------------------------------
 
@@ -487,7 +558,7 @@ CREATE OR REPLACE VIEW v_entity_relationships AS SELECT * FROM entity_relationsh
 
 CREATE OR REPLACE VIEW v_user_behavior_logs AS SELECT * FROM user_behavior_logs;
 
-
+CREATE OR REPLACE VIEW v_user_access_logs AS SELECT * FROM user_access_logs;
 
 CREATE OR REPLACE VIEW v_qa_sessions AS SELECT * FROM qa_sessions;
 
@@ -827,14 +898,14 @@ WHERE `relationship_type` = '公布' AND (`cidoc_property_id` IS NULL OR `cidoc_
 
 -- 创建默认管理员账户（admin/123456）
 -- 密码123456的SHA256哈希值
-INSERT INTO `users` (`username`, `password_hash`, `role`, `nickname`, `avatar_path`) 
+INSERT INTO `users` (`account`, `password_hash`, `role`, `nickname`, `avatar_path`) 
 VALUES (
-    'admin', 
+    '12345678', 
     '8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92', 
     '管理员',
     '管理员',
     './default.jpg'
-) ON DUPLICATE KEY UPDATE `username` = `username`;
+) ON DUPLICATE KEY UPDATE `account` = `account`;
 
 
 

@@ -22,13 +22,18 @@
             <span>⚙️</span> 设置
           </div>
           
+          <!-- 数据大屏入口（仅管理员可见） -->
+          <router-link v-if="isAdmin" to="/dashboard" class="text-link dashboard-link">
+            📊 数据大屏
+          </router-link>
+          
           <!-- 用户头像和昵称 -->
           <div class="user-profile">
             <div class="user-profile-content">
               <div class="user-avatar-container">
                 <img :src="getAvatarUrl(userInfo?.avatar_path)" class="user-avatar" alt="头像" @error="handleAvatarError" />
               </div>
-              <div class="user-nickname">{{ userInfo?.nickname || userInfo?.username || '用户' }}</div>
+              <div class="user-nickname">{{ userInfo?.nickname || userInfo?.account || '用户' }}</div>
             </div>
           </div>
         </div>
@@ -272,6 +277,11 @@ const changeSecuritySuccess = ref('');
 const useSecurityQuestionForPassword = ref(false);
 const securityAnswerForPassword = ref('');
 
+// 修改昵称相关
+const newNickname = ref('');
+const changeNicknameError = ref('');
+const changeNicknameSuccess = ref('');
+
 onMounted(() => {
   console.log('App.vue mounted');
   const savedUser = localStorage.getItem('userInfo');
@@ -279,7 +289,7 @@ onMounted(() => {
     try {
       const parsedUser = JSON.parse(savedUser);
       // 验证用户信息是否有效（检查必要字段）
-      if (!parsedUser || !parsedUser.id || !parsedUser.username) {
+      if (!parsedUser || !parsedUser.id || !parsedUser.account) {
         console.log('localStorage中的用户信息无效，已清除');
         localStorage.removeItem('userInfo');
         userInfo.value = null;
@@ -299,6 +309,11 @@ onMounted(() => {
 
 const isLoggedIn = computed(() => !!userInfo.value);
 
+// 检查是否为管理员（从数据库users表的role字段判断）
+const isAdmin = computed(() => {
+  return userInfo.value && userInfo.value.role === '管理员';
+});
+
 // 监听路由变化，更新用户信息
 router.afterEach(() => {
   // 当路由变化时，重新从localStorage读取用户信息
@@ -307,7 +322,7 @@ router.afterEach(() => {
     try {
       const parsedUser = JSON.parse(savedUser);
       // 验证用户信息是否有效（检查必要字段）
-      if (!parsedUser || !parsedUser.id || !parsedUser.username) {
+      if (!parsedUser || !parsedUser.id || !parsedUser.account) {
         console.log('localStorage中的用户信息无效，已清除');
         localStorage.removeItem('userInfo');
         userInfo.value = null;
@@ -857,6 +872,58 @@ const handleChangeSecurityQuestion = async () => {
   } catch (error) {
     console.error('更换二级问题失败:', error);
     changeSecurityError.value = '网络错误，请稍后重试';
+  }
+};
+
+const handleChangeNickname = async () => {
+  changeNicknameError.value = '';
+  changeNicknameSuccess.value = '';
+  
+  if (!newNickname.value.trim()) {
+    changeNicknameError.value = '请输入新昵称';
+    return;
+  }
+  
+  if (newNickname.value.trim().length > 100) {
+    changeNicknameError.value = '昵称长度不能超过100个字符';
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/auth/update-nickname', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': userInfo.value.id.toString()
+      },
+      body: JSON.stringify({
+        nickname: newNickname.value.trim()
+      })
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      changeNicknameSuccess.value = '昵称修改成功';
+      // 更新用户信息
+      if (result.user_info) {
+        userInfo.value.nickname = result.user_info.nickname;
+        localStorage.setItem('userInfo', JSON.stringify(userInfo.value));
+      } else {
+        userInfo.value.nickname = newNickname.value.trim();
+        localStorage.setItem('userInfo', JSON.stringify(userInfo.value));
+      }
+      newNickname.value = '';
+      // 2秒后清空成功消息
+      setTimeout(() => {
+        changeNicknameSuccess.value = '';
+      }, 2000);
+    } else {
+      changeNicknameError.value = result.message || '修改昵称失败';
+    }
+  } catch (error) {
+    console.error('修改昵称失败:', error);
+    changeNicknameError.value = '网络错误，请稍后重试';
   }
 };
 

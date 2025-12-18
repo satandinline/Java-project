@@ -13,7 +13,7 @@ python database_files/run_init_schema.py
 - 连接到MySQL数据库（使用root账户）
 - 执行 `init_schema.sql` 中的所有SQL语句
 - 创建所有表、视图、索引和角色
-- 创建默认管理员账户（admin/123456）
+- 创建默认管理员账户（账号：12345678，密码：123456）
 
 **配置说明：**
 - 脚本会从环境变量或 `.env` 文件读取数据库配置
@@ -47,6 +47,9 @@ mysql -u root -p < database_files/init_schema.sql
 15. **user_ratings** - 用户评分表
 16. **user_comments** - 用户评论表
 17. **comment_replies** - 评论回复表
+18. **comment_likes** - 评论点赞表
+19. **notifications** - 通知表
+20. **user_access_logs** - 用户访问日志表
 
 ### ER图
 
@@ -65,10 +68,15 @@ mysql -u root -p < database_files/init_schema.sql
 - `security_answer_hash` - 安全问题答案的哈希值（SHA-256）
 
 **默认管理员账户：**
-- 用户名：`admin`
+- 账号：`12345678`（8位数字，系统自动生成）
 - 密码：`123456`（SHA-256哈希值：`8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92`）
 - 角色：管理员
 - 昵称：管理员
+
+**注意**：
+- 账号字段已从`username`改为`account`
+- 账号是系统自动生成的8-10位数字，永久不可修改
+- 用户注册时系统会自动生成唯一账号
 
 ### 2. 文化资源表 (cultural_resources)
 

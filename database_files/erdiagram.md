@@ -9,9 +9,13 @@ erDiagram
     %% 用户相关表
     users {
         BIGINT id PK
-        VARCHAR username UK
+        VARCHAR account UK "用户账号（8-10位数字，系统自动生成）"
         VARCHAR password_hash
         ENUM role
+        VARCHAR nickname "用户昵称（可修改）"
+        VARCHAR avatar_path
+        VARCHAR security_question
+        VARCHAR security_answer_hash
         TIMESTAMP created_at
     }
     

@@ -2,10 +2,20 @@
   <div class="aigc-container">
     <!-- 顶部论坛入口 -->
     <div class="forum-header">
-      <button class="forum-btn" @click="openForum">
+      <button class="forum-btn" @click="toggleComments">
         <span class="forum-icon">💬</span>
-        论坛
+        评论
+        <span v-if="unreadNotifications > 0" class="notification-badge">{{ unreadNotifications }}</span>
       </button>
+    </div>
+
+    <!-- 评论面板 -->
+    <div v-if="showComments" class="comments-panel">
+      <CommentSection 
+        :resource-id="currentResourceId"
+        :user-id="currentUserInfo?.id"
+        @close="showComments = false"
+      />
     </div>
 
     <div class="aigc-layout">
@@ -312,6 +322,7 @@
 
 <script setup>
 import { ref, computed, nextTick, onMounted } from 'vue';
+import CommentSection from './CommentSection.vue';
 
 // 获取当前登录用户信息
 const getCurrentUser = () => {
@@ -388,6 +399,9 @@ const isLoading = ref(false);
 const sessionListRef = ref(null);
 const conversationAreaRef = ref(null);
 const previewImageUrl = ref(null);
+const showComments = ref(false);
+const currentResourceId = ref(1); // 默认资源ID，可以根据实际情况修改
+const unreadNotifications = ref(0);
 
 // 格式化时间
 const formatTime = (timestamp) => {
@@ -915,18 +929,29 @@ const scrollToBottom = () => {
   }
 };
 
-// 打开论坛
-const openForum = () => {
-  const currentUrl = window.location.href;
-  const conversationLink = currentConversation.value.length > 0 
-    ? encodeURIComponent(JSON.stringify(currentConversation.value))
-    : '';
-  
-  const forumUrl = conversationLink 
-    ? `/forum?conversation=${conversationLink}`
-    : '/forum';
-  
-  window.open(forumUrl, '_blank');
+// 切换评论面板
+const toggleComments = () => {
+  showComments.value = !showComments.value;
+  if (showComments.value) {
+    loadNotifications();
+  }
+};
+
+// 加载未读通知
+const loadNotifications = async () => {
+  try {
+    const userInfo = getCurrentUser();
+    if (!userInfo || !userInfo.id) return;
+    
+    const response = await fetch(`/api/notifications?user_id=${userInfo.id}&is_read=0`);
+    const data = await response.json();
+    
+    if (data.success) {
+      unreadNotifications.value = data.notifications?.length || 0;
+    }
+  } catch (error) {
+    console.error('加载通知失败:', error);
+  }
 };
 
 // 格式化答案文本（支持换行等）
@@ -1181,6 +1206,9 @@ onMounted(async () => {
   if (savedCollapsedState !== null) {
     isHistoryCollapsed.value = savedCollapsedState === 'true';
   }
+  
+  // 加载未读通知
+  loadNotifications();
   
   // 从数据库加载历史会话
   await loadSessionsFromDB();
@@ -2005,5 +2033,36 @@ onMounted(async () => {
 .session-list::-webkit-scrollbar-thumb:hover,
 .conversation-area::-webkit-scrollbar-thumb:hover {
   background: #a8a8a8;
+}
+
+/* 评论面板样式 */
+.comments-panel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 600px;
+  max-width: 90vw;
+  max-height: 80vh;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  z-index: 2000;
+  overflow: hidden;
+}
+
+.notification-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  background: #f56c6c;
+  color: #fff;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 </style>

@@ -22,11 +22,14 @@
 
 图片信息存储到 `crawled_images` 表，包含以下字段：
 
-- `file_name`: 文件名（如 "1.jpg"）
-- `storage_path`: 存储路径（如 "crawled_images/1.jpg"）
+- `file_name`: 文件名（如 "8.jpg" 或 "8-1.jpg"）
+- `storage_path`: 存储路径（如 "crawled_images/8.jpg"）
 - `dimensions`: 图片尺寸（如 "1024x768"）
 - `crawl_time`: 抓取时间（自动）
-- `tags`: JSON格式的标签数组
+- `tags`: JSON格式的标签数组（已清洗，移除纯数字等无关信息）
+- `resource_id`: 关联的文化资源ID（如果图片属于某个文字资源）
+- `entity_id`: 关联的文化实体ID（如果图片属于某个文化实体）
+- `festival_name`: 节日名称（中文，用于快速查询）
 
 ### 文字数据存储
 

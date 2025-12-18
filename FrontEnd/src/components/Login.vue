@@ -7,13 +7,15 @@
       <!-- 登录表单 -->
       <form v-if="!isRegisterMode && !showForgotPassword" @submit.prevent="handleLogin">
         <div class="input-group">
-          <label>用户名</label>
+          <label>账号</label>
           <input 
             type="text" 
-            v-model="username" 
-            placeholder="请输入用户名（至少3个字符，只能包含数字和英文字母）"
+            v-model="account" 
+            placeholder="请输入账号（8-10位数字）"
             required
             :disabled="isLoading"
+            maxlength="10"
+            pattern="[0-9]{8,10}"
           >
         </div>
         
@@ -41,21 +43,6 @@
       <!-- 注册表单 -->
       <form v-if="isRegisterMode && !showForgotPassword" @submit.prevent="handleRegister" enctype="multipart/form-data">
         <div class="input-group">
-          <label>用户名</label>
-          <input 
-            type="text" 
-            v-model="username" 
-            @input="validateUsername"
-            placeholder="请输入用户名（至少3个字符，只能包含数字和英文字母）"
-            required
-            :disabled="isLoading"
-          >
-          <div v-if="usernameError" class="error-message" style="margin-top: 5px;">
-            {{ usernameError }}
-          </div>
-        </div>
-        
-        <div class="input-group">
           <label>密码</label>
           <input 
             type="password" 
@@ -78,6 +65,12 @@
             placeholder="请输入昵称"
             :disabled="isLoading"
           >
+        </div>
+        
+        <div class="info-box" style="background: #e6f7ff; border: 1px solid #91d5ff; padding: 12px; border-radius: 4px; margin-bottom: 16px;">
+          <p style="margin: 0; color: #1890ff; font-size: 14px;">
+            💡 提示：注册成功后，系统将自动为您生成一个8-10位的数字账号，请妥善保管。
+          </p>
         </div>
         
         <div class="input-group">
@@ -132,13 +125,15 @@
       <div v-if="showForgotPassword" class="forgot-password">
         <div v-if="!securityQuestionReceived">
           <div class="input-group">
-            <label>用户名</label>
+            <label>账号</label>
             <input 
               type="text" 
-              v-model="forgotUsername" 
-              placeholder="请输入用户名"
+              v-model="forgotAccount" 
+              placeholder="请输入账号（8-10位数字）"
               required
               :disabled="isLoading"
+              maxlength="10"
+              pattern="[0-9]{8,10}"
             >
           </div>
           <div v-if="errorMessage" class="error-message">
@@ -239,7 +234,7 @@ const router = useRouter();
 const defaultAvatarUrl = '/default.jpg';
 
 // 响应式数据
-const username = ref('');
+const account = ref('');  // 登录时使用的账号
 const password = ref('');
 const nickname = ref('');
 const avatarFile = ref(null);
@@ -249,36 +244,17 @@ const securityAnswer = ref('');
 const isRegisterMode = ref(false);
 const isLoading = ref(false);
 const errorMessage = ref('');
-const usernameError = ref('');
 const passwordError = ref('');
 
 // 忘记密码相关
 const showForgotPassword = ref(false);
-const forgotUsername = ref('');
+const forgotAccount = ref('');  // 忘记密码时使用的账号
 const securityQuestionReceived = ref('');
 const securityAnswerInput = ref('');
 const answerVerified = ref(false);
 const newPassword = ref('');
 const confirmPassword = ref('');
 
-const validateUsername = () => {
-  usernameError.value = '';
-  if (!username.value.trim()) {
-    return;
-  }
-  
-  if (username.value.trim().length < 3) {
-    usernameError.value = '用户名至少需要3个字符';
-    return;
-  }
-  
-  // 验证用户名只能包含数字和英文字母
-  const usernameRegex = /^[a-zA-Z0-9]+$/;
-  if (!usernameRegex.test(username.value.trim())) {
-    usernameError.value = '用户名只能包含数字和英文字母';
-    return;
-  }
-};
 
 const validatePassword = () => {
   passwordError.value = '';
@@ -303,9 +279,8 @@ const validatePassword = () => {
 const toggleMode = () => {
   isRegisterMode.value = !isRegisterMode.value;
   errorMessage.value = '';
-  usernameError.value = '';
   passwordError.value = '';
-  username.value = '';
+  account.value = '';
   password.value = '';
   nickname.value = '';
   avatarFile.value = null;
@@ -327,7 +302,7 @@ const handleAvatarChange = (event) => {
 };
 
 const resetForgotPassword = () => {
-  forgotUsername.value = '';
+  forgotAccount.value = '';
   securityQuestionReceived.value = '';
   securityAnswerInput.value = '';
   answerVerified.value = false;
@@ -337,8 +312,15 @@ const resetForgotPassword = () => {
 };
 
 const handleLogin = async () => {
-  if (!username.value.trim() || !password.value.trim()) {
-    errorMessage.value = '请输入用户名和密码';
+  if (!account.value.trim() || !password.value.trim()) {
+    errorMessage.value = '请输入账号和密码';
+    return;
+  }
+
+  // 验证账号格式（8-10位数字）
+  const accountRegex = /^[0-9]{8,10}$/;
+  if (!accountRegex.test(account.value.trim())) {
+    errorMessage.value = '账号格式不正确，请输入8-10位数字';
     return;
   }
 
@@ -352,7 +334,7 @@ const handleLogin = async () => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        username: username.value.trim(),
+        account: account.value.trim(),
         password: password.value
       })
     });
@@ -363,8 +345,8 @@ const handleLogin = async () => {
       // 保存用户信息到本地存储
       const userInfo = {
         id: result.user_info.id,
-        username: result.user_info.username,
-        nickname: result.user_info.nickname || result.user_info.username,
+        account: result.user_info.account,
+        nickname: result.user_info.nickname || result.user_info.account,
         avatar_path: result.user_info.avatar_path || '/default.jpg',
         role: result.user_info.role
       };
@@ -388,28 +370,15 @@ const handleLogin = async () => {
 
 const handleRegister = async () => {
   // 先进行验证
-  validateUsername();
   validatePassword();
   
-  if (usernameError.value || passwordError.value) {
+  if (passwordError.value) {
     errorMessage.value = '请修正上述错误后重试';
     return;
   }
   
-  if (!username.value.trim() || !password.value.trim()) {
-    errorMessage.value = '请输入用户名和密码';
-    return;
-  }
-
-  if (username.value.trim().length < 3) {
-    errorMessage.value = '用户名至少需要3个字符';
-    return;
-  }
-
-  // 验证用户名只能包含数字和英文字母
-  const usernameRegex = /^[a-zA-Z0-9]+$/;
-  if (!usernameRegex.test(username.value.trim())) {
-    errorMessage.value = '用户名只能包含数字和英文字母';
+  if (!password.value.trim()) {
+    errorMessage.value = '请输入密码';
     return;
   }
 
@@ -435,7 +404,6 @@ const handleRegister = async () => {
 
   try {
     const formData = new FormData();
-    formData.append('username', username.value.trim());
     formData.append('password', password.value);
     if (nickname.value.trim()) {
       formData.append('nickname', nickname.value.trim());
@@ -456,9 +424,29 @@ const handleRegister = async () => {
     const result = await response.json();
 
     if (result.success) {
-      // 注册成功后自动登录
+      // 注册成功，显示账号信息
+      const userInfo = result.user_info;
       errorMessage.value = '';
-      await handleLogin();
+      
+      // 显示成功消息，包含生成的账号
+      alert(`注册成功！\n您的账号：${userInfo.account}\n请妥善保管，可直接登录。`);
+      
+      // 保存用户信息到本地存储
+      localStorage.setItem('userInfo', JSON.stringify({
+        id: userInfo.id,
+        account: userInfo.account,
+        nickname: userInfo.nickname || userInfo.account,
+        avatar_path: userInfo.avatar_path || '/default.jpg',
+        role: userInfo.role
+      }));
+      
+      // 通知 App.vue 切换页面
+      emit('login-success', userInfo);
+      
+      // 延迟跳转，让用户看到成功消息
+      setTimeout(() => {
+        router.push('/');
+      }, 1000);
     } else {
       errorMessage.value = result.message || '注册失败，请重试';
     }
@@ -486,7 +474,7 @@ const getSecurityQuestion = async () => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        username: forgotUsername.value.trim()
+        account: forgotAccount.value.trim()
       })
     });
 
@@ -523,7 +511,7 @@ const verifyAnswer = async () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          username: forgotUsername.value.trim(),
+          account: forgotAccount.value.trim(),
           answer: securityAnswerInput.value.trim()
         })
       });
@@ -569,7 +557,7 @@ const verifyAnswer = async () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          username: forgotUsername.value.trim(),
+          account: forgotAccount.value.trim(),
           answer: securityAnswerInput.value.trim(),
           new_password: newPassword.value.trim()
         })

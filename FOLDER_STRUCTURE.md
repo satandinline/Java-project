@@ -67,7 +67,7 @@
 
 **实际情况**：
 - 当前头像实际存储在 `FrontEnd/public/` 文件夹
-- 命名格式：`{username}.jpg`（如：admin.jpg）
+- 命名格式：`{account}.jpg`（使用账号，如：12345678.jpg）
 - 前端配置了 `/avatars` 代理，但后端未实现对应路由
 
 **建议**：
@@ -98,18 +98,19 @@
 
 **存储内容**：
 - `default.jpg`：默认头像（所有用户未上传头像时显示）
-- `{username}.jpg`：用户上传的头像（如：admin.jpg）
+- `{account}.jpg`：用户上传的头像（使用账号，如：12345678.jpg）
 - `favicon.ico`：网站图标
 - `videos/`：轮播视频文件
 
 **头像处理**：
 - 用户上传的头像会自动压缩到200x200像素
 - 统一保存为JPG格式
-- 命名格式：`{username}.jpg`
+- 命名格式：`{account}.jpg`（使用账号，如：12345678.jpg）
+- **注意**：头像文件名使用账号（account），而非昵称（nickname）
 
 **访问路径**：
 - 默认头像：`/default.jpg`
-- 用户头像：`/{username}.jpg`
+- 用户头像：`/{account}.jpg`（使用账号，如：/12345678.jpg）
 - 通过Flask的静态文件服务提供
 
 **代码位置**：

@@ -25,6 +25,12 @@
 
     <!-- ==================== 修改开始：搜索栏 ==================== -->
     <div class="search-section">
+      <!-- 管理员数据大屏入口 -->
+      <div v-if="isAdmin" class="admin-dashboard-link">
+        <router-link to="/dashboard" class="dashboard-btn">
+          📊 数据大屏
+        </router-link>
+      </div>
       <div class="search-bar">
         <!-- 支持空输入跳转 -->
         <input 
@@ -57,16 +63,12 @@
           @click="goToResourceDetail(item)"
         >
           <div class="res-img-container">
-            <!-- 注意：搜索接口目前可能没有图片，会显示暂无图片 -->
+            <!-- 所有资源都应该有图片URL（即使是default图片） -->
             <img 
-              v-if="item.image_url" 
-              :src="item.image_url" 
+              :src="item.image_url || '/default.jpg'" 
               class="res-img" 
               @error="handleImageError($event)"
             />
-            <div v-else class="res-img-placeholder">
-              <span>暂无图片</span>
-            </div>
           </div>
           <div class="res-info">
             <h3 class="res-entity-name">{{ item.entity_name }}</h3>
@@ -259,9 +261,22 @@ const visiblePages = computed(() => {
 });
 
 const handleImageError = (event) => {
-  event.target.style.display = 'none';
-  const placeholder = event.target.nextElementSibling;
-  if (placeholder) placeholder.style.display = 'flex';
+  // 如果图片加载失败，尝试使用default图片
+  if (event.target.src && !event.target.src.includes('/default.jpg')) {
+    event.target.src = '/default.jpg';
+  } else {
+    // 如果default图片也加载失败，显示占位符
+    event.target.style.display = 'none';
+    // 创建占位符（如果不存在）
+    let placeholder = event.target.nextElementSibling;
+    if (!placeholder || !placeholder.classList.contains('res-img-placeholder')) {
+      placeholder = document.createElement('div');
+      placeholder.className = 'res-img-placeholder';
+      placeholder.innerHTML = '<span>暂无图片</span>';
+      event.target.parentElement.appendChild(placeholder);
+    }
+    placeholder.style.display = 'flex';
+  }
 };
 
 // 初始化
@@ -578,5 +593,27 @@ onMounted(async () => {
 .jump-btn:hover {
   background: #66b1ff;
   border-color: #66b1ff;
+}
+
+.admin-dashboard-link {
+  text-align: right;
+  margin-bottom: 10px;
+}
+
+.dashboard-btn {
+  display: inline-block;
+  padding: 8px 16px;
+  background: #409eff;
+  color: white;
+  text-decoration: none;
+  border-radius: 5px;
+  font-size: 14px;
+  transition: all 0.3s;
+}
+
+.dashboard-btn:hover {
+  background: #66b1ff;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(64, 158, 255, 0.3);
 }
 </style>

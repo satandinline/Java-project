@@ -35,6 +35,15 @@ class AuthSystem:
         """对密码进行哈希加密"""
         return hashlib.sha256(password.encode()).hexdigest()
     
+    def _generate_random_account(self) -> str:
+        """生成随机账号（8-10位数字字符串）"""
+        import random
+        length = random.randint(8, 10)
+        # 生成8-10位数字字符串，第一位不能是0
+        first_digit = random.randint(1, 9)
+        rest_digits = ''.join([str(random.randint(0, 9)) for _ in range(length - 1)])
+        return str(first_digit) + rest_digits
+    
     def _generate_random_nickname(self) -> str:
         """生成随机昵称（10位英文字符）"""
         import random
@@ -46,12 +55,11 @@ class AuthSystem:
         import random
         return str(random.randint(1000, 9999))
 
-    def register(self, username: str, password: str, nickname: str = None, 
+    def register(self, password: str, nickname: str = None, 
                  avatar_path: str = None, security_question: str = None, 
                  security_answer: str = None) -> Dict:
         """
         注册入口：用户主动选择注册时调用
-        :param username: 账号名
         :param password: 密码
         :param nickname: 昵称（可选，未提供则随机生成）
         :param avatar_path: 头像路径（可选，未提供则使用默认头像）
@@ -59,16 +67,8 @@ class AuthSystem:
         :param security_answer: 安全问题答案（可选）
         :return: 注册结果字典，包含成功状态、消息和用户信息
         """
-        if not username or not password:
-            return {"success": False, "message": "用户名和密码不能为空"}
-        
-        if len(username) < 3:
-            return {"success": False, "message": "用户名至少需要3个字符"}
-        
-        # 验证用户名只能包含数字和英文字母
-        import re
-        if not re.match(r'^[a-zA-Z0-9]+$', username):
-            return {"success": False, "message": "用户名只能包含数字和英文字母"}
+        if not password:
+            return {"success": False, "message": "密码不能为空"}
         
         if len(password) < 6:
             return {"success": False, "message": "密码至少需要6个字符"}
@@ -92,20 +92,28 @@ class AuthSystem:
         
         try:
             with conn.cursor() as cursor:
-                # 检查用户名是否已存在
-                cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
-                if cursor.fetchone():
-                    return {"success": False, "message": "该用户名已存在，请使用其他用户名"}
+                # 生成唯一的账号（8-10位数字）
+                max_attempts = 100  # 最多尝试100次生成唯一账号
+                account = None
+                for _ in range(max_attempts):
+                    candidate_account = self._generate_random_account()
+                    cursor.execute("SELECT id FROM users WHERE account = %s", (candidate_account,))
+                    if not cursor.fetchone():
+                        account = candidate_account
+                        break
+                
+                if not account:
+                    return {"success": False, "message": "账号生成失败，请稍后重试"}
                 
                 # 加密密码
                 password_hash = self._hash_password(password)
                 
                 # 插入新用户（默认角色为'普通用户'）
                 cursor.execute(
-                    """INSERT INTO users (username, password_hash, role, nickname, avatar_path, 
+                    """INSERT INTO users (account, password_hash, role, nickname, avatar_path, 
                        security_question, security_answer_hash) 
                        VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-                    (username, password_hash, "普通用户", nickname, avatar_path, 
+                    (account, password_hash, "普通用户", nickname, avatar_path, 
                      security_question, security_answer_hash)
                 )
                 conn.commit()
@@ -115,10 +123,10 @@ class AuthSystem:
                 
                 return {
                     "success": True,
-                    "message": f"注册成功！账号：{username}，可直接登录",
+                    "message": f"注册成功！您的账号：{account}，请妥善保管，可直接登录",
                     "user_info": {
                         "id": user_id,
-                        "username": username,
+                        "account": account,
                         "nickname": nickname,
                         "avatar_path": avatar_path,
                         "role": "普通用户"
@@ -131,15 +139,15 @@ class AuthSystem:
         finally:
             conn.close()
 
-    def login(self, username: str, password: str) -> Dict:
+    def login(self, account: str, password: str) -> Dict:
         """
         登录入口：用户主动选择登录时调用
-        :param username: 输入的账号
+        :param account: 输入的账号（8-10位数字）
         :param password: 输入的密码
         :return: 登录结果字典，包含成功状态、消息和用户信息
         """
-        if not username or not password:
-            return {"success": False, "message": "用户名和密码不能为空"}
+        if not account or not password:
+            return {"success": False, "message": "账号和密码不能为空"}
         
         conn = self._get_db_connection()
         if not conn:
@@ -147,10 +155,10 @@ class AuthSystem:
         
         try:
             with conn.cursor() as cursor:
-                # 查询用户
+                # 查询用户（使用account字段）
                 cursor.execute(
-                    "SELECT id, username, password_hash, role, nickname, avatar_path FROM users WHERE username = %s",
-                    (username,)
+                    "SELECT id, account, password_hash, role, nickname, avatar_path FROM users WHERE account = %s",
+                    (account,)
                 )
                 user = cursor.fetchone()
                 
@@ -168,14 +176,14 @@ class AuthSystem:
                     avatar_path = '/default.jpg'
                 user_info = {
                     "id": user["id"],
-                    "username": user["username"],
+                    "account": user["account"],
                     "role": user["role"],
-                    "nickname": user.get("nickname", user["username"]),
+                    "nickname": user.get("nickname", user["account"]),
                     "avatar_path": avatar_path
                 }
                 return {
                     "success": True,
-                    "message": f"登录成功！欢迎回来，{user_info.get('nickname', username)}",
+                    "message": f"登录成功！欢迎回来，{user_info.get('nickname', account)}",
                     "user_info": user_info
                 }
         except Exception as e:
@@ -193,16 +201,16 @@ class AuthSystem:
         try:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT id, username, role, nickname, avatar_path, security_question FROM users WHERE id = %s",
+                    "SELECT id, account, role, nickname, avatar_path, security_question FROM users WHERE id = %s",
                     (user_id,)
                 )
                 user = cursor.fetchone()
                 if user:
                     return {
                         "id": user["id"],
-                        "username": user["username"],
+                        "account": user["account"],
                         "role": user["role"],
-                        "nickname": user.get("nickname", user["username"]),
+                        "nickname": user.get("nickname", user["account"]),
                         "avatar_path": user.get("avatar_path", "./default.jpg"),
                         "security_question": user.get("security_question")
                     }
@@ -213,7 +221,41 @@ class AuthSystem:
         finally:
             conn.close()
     
-    def get_security_question(self, username: str) -> Optional[Dict]:
+    def update_nickname(self, user_id: int, nickname: str) -> Dict:
+        """修改用户昵称"""
+        if not nickname or not nickname.strip():
+            return {"success": False, "message": "昵称不能为空"}
+        
+        if len(nickname.strip()) > 100:
+            return {"success": False, "message": "昵称长度不能超过100个字符"}
+        
+        conn = self._get_db_connection()
+        if not conn:
+            return {"success": False, "message": "数据库连接失败"}
+        
+        try:
+            with conn.cursor() as cursor:
+                # 检查用户是否存在
+                cursor.execute("SELECT id FROM users WHERE id = %s", (user_id,))
+                if not cursor.fetchone():
+                    return {"success": False, "message": "用户不存在"}
+                
+                # 更新昵称
+                cursor.execute(
+                    "UPDATE users SET nickname = %s WHERE id = %s",
+                    (nickname.strip(), user_id)
+                )
+                conn.commit()
+                
+                return {"success": True, "message": "昵称修改成功"}
+        except Exception as e:
+            conn.rollback()
+            print(f"修改昵称失败: {e}")
+            return {"success": False, "message": f"修改昵称失败：{str(e)}"}
+        finally:
+            conn.close()
+    
+    def get_security_question(self, account: str) -> Optional[Dict]:
         """获取用户的安全问题"""
         conn = self._get_db_connection()
         if not conn:
@@ -222,8 +264,8 @@ class AuthSystem:
         try:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT id, security_question FROM users WHERE username = %s",
-                    (username,)
+                    "SELECT id, security_question FROM users WHERE account = %s",
+                    (account,)
                 )
                 user = cursor.fetchone()
                 if user and user.get("security_question"):
@@ -239,7 +281,7 @@ class AuthSystem:
         finally:
             conn.close()
     
-    def verify_security_answer(self, username: str, answer: str) -> Dict:
+    def verify_security_answer(self, account: str, answer: str) -> Dict:
         """验证安全问题答案"""
         conn = self._get_db_connection()
         if not conn:
@@ -248,8 +290,8 @@ class AuthSystem:
         try:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT id, security_answer_hash FROM users WHERE username = %s",
-                    (username,)
+                    "SELECT id, security_answer_hash FROM users WHERE account = %s",
+                    (account,)
                 )
                 user = cursor.fetchone()
                 if not user:
@@ -270,7 +312,7 @@ class AuthSystem:
         finally:
             conn.close()
     
-    def reset_password(self, username: str, new_password: str) -> Dict:
+    def reset_password(self, account: str, new_password: str) -> Dict:
         """重置密码"""
         if len(new_password) < 6:
             return {"success": False, "message": "密码至少需要6个字符"}
@@ -282,7 +324,7 @@ class AuthSystem:
         try:
             with conn.cursor() as cursor:
                 # 检查用户是否存在
-                cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
+                cursor.execute("SELECT id FROM users WHERE account = %s", (account,))
                 user = cursor.fetchone()
                 if not user:
                     return {"success": False, "message": "用户不存在"}
@@ -290,8 +332,8 @@ class AuthSystem:
                 # 更新密码
                 password_hash = self._hash_password(new_password)
                 cursor.execute(
-                    "UPDATE users SET password_hash = %s WHERE username = %s",
-                    (password_hash, username)
+                    "UPDATE users SET password_hash = %s WHERE account = %s",
+                    (password_hash, account)
                 )
                 conn.commit()
                 

@@ -54,21 +54,21 @@ class UserLogging:
             return False
     
     @staticmethod
-    def log_login(user_id: int, username: str) -> bool:
+    def log_login(user_id: int, account: str) -> bool:
         """记录用户登录行为"""
         return UserLogging.log_behavior(
             user_id, 
             '交互', 
-            f"用户登录：{username}"
+            f"用户登录：{account}"
         )
     
     @staticmethod
-    def log_register(user_id: int, username: str) -> bool:
+    def log_register(user_id: int, account: str) -> bool:
         """记录用户注册行为"""
         return UserLogging.log_behavior(
             user_id, 
             '交互', 
-            f"用户注册：{username}"
+            f"用户注册：{account}"
         )
     
     @staticmethod

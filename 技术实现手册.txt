@@ -6,915 +6,612 @@
 更新日期：2025年12月17日
 
 ================================================================================
-一、项目概述
+一、目录
 ================================================================================
 
-1.1 项目简介
-------------
-公共文化资源管理系统是一个基于AI的综合性文化资源管理平台，支持文化资源的
-爬取、存储、检索、生成和管理。系统采用前后端分离架构，使用Python Flask
-作为后端API服务器，Vue.js 3作为前端框架。
+1. 系统架构
+2. 技术栈
+3. 数据库设计
+4. 核心功能实现
+5. API接口文档
+6. 代码规范与最佳实践
+7. 部署与运维
 
-1.2 核心功能
-------------
-- 用户管理和认证系统
-- 文化资源爬取（民族文化资源库、维基百科）
-- AIGC内容生成（文字和图片）
-- 图文互搜功能
-- 资源上传和审核
-- 标注任务管理
-- 用户评分和评论系统
+================================================================================
 
-1.3 技术栈
-----------
-后端：
+系统架构
+
+整体架构
+
+┌─────────────────┐
+│   前端 (Vue.js) │
+│   Port: 5173    │
+└────────┬────────┘
+         │ HTTP/API
+         ▼
+┌─────────────────┐
+│ 后端 (Flask)    │
+│  Port: 8000     │
+└────────┬────────┘
+         │
+    ┌────┴────┐
+    │         │
+    ▼         ▼
+┌────────┐ ┌──────────┐
+│ MySQL  │ │  AI模型  │
+│ 数据库 │ │ (Tongyi/ │
+│        │ │ Huoshan) │
+└────────┘ └──────────┘
+
+模块划分
+
+1. 前端模块 (`FrontEnd/`)
+   - 用户界面组件
+   - 路由管理
+   - 状态管理
+
+2. 后端API模块 (`AIGC/aigc_api_server.py`)
+   - RESTful API接口
+   - 业务逻辑处理
+   - 数据验证
+
+3. 认证模块 (`login.py`)
+   - 用户注册/登录
+   - 密码管理
+   - 权限控制
+
+4. 数据爬取模块 (`spider/`)
+   - 民族文化资源库爬虫
+   - 维基百科爬虫
+   - 数据清洗与存储
+
+5. AIGC模块 (`AIGC/`)
+   - RAG检索增强生成
+   - 图像生成
+   - 多模态理解
+
+6. 数据库模块 (`database_files/`)
+   - 数据库初始化
+   - 表结构定义
+   - 数据迁移脚本
+
+================================================================================
+
+技术栈
+
+后端技术
+
 - Python 3.7+
-- Flask 2.3.0+ (Web框架)
-- PyMySQL (MySQL数据库连接)
-- LangChain 0.3.26+ (RAG和AIGC核心)
-- ChromaDB (向量数据库)
-- Pillow (图像处理)
-- NumPy (数值计算)
+- Flask: Web框架
+- PyMySQL: MySQL数据库驱动
+- LangChain: RAG框架
+- ChromaDB: 向量数据库
+- Pillow (PIL): 图像处理
+- BeautifulSoup4: HTML解析
+- Requests: HTTP请求
 
-前端：
-- Vue.js 3 (Composition API)
-- Vite (构建工具)
-- Vue Router 4 (路由管理)
+前端技术
 
-数据库：
-- MySQL 5.7+
-- 17个数据表
-- 支持视图和索引
+- Vue.js 3: 前端框架（Composition API）
+- Vite: 构建工具
+- Vue Router 4: 路由管理
+- Axios: HTTP客户端（通过fetch API实现）
 
-AI模型：
-- 文字AIGC：通义千问（Tongyi）
-- 图片AIGC：火山引擎Seedream（Huoshan）
-- 备选：OpenAI GPT
+数据库
 
-================================================================================
-二、系统架构
-================================================================================
+- MySQL 5.7+: 关系型数据库
+- 字符集: utf8mb4（支持emoji等特殊字符）
 
-2.1 目录结构
-------------
-Java-project/
-├── AIGC/                          # AIGC功能模块
-│   ├── aigc_api_server.py        # Flask API服务器（主后端服务）
-│   ├── RAG.py                    # RAG检索增强生成系统
-│   ├── image_RAG.py              # 图像生成系统
-│   ├── aigc_db_helper.py         # AIGC数据库辅助工具
-│   └── README_AIGC.md            # AIGC功能说明
-├── FrontEnd/                      # 前端Vue.js应用
-│   ├── src/                      # 源代码
-│   │   ├── components/           # Vue组件
-│   │   │   ├── Login.vue        # 登录/注册组件
-│   │   │   ├── HomeView.vue     # 首页组件
-│   │   │   ├── AIGCView.vue     # AIGC功能页面
-│   │   │   ├── MultiModalSearch.vue  # 图文互搜页面
-│   │   │   ├── ResourceUpload.vue    # 资源上传页面
-│   │   │   └── AnnotationTasks.vue   # 标注任务页面
-│   │   ├── router/              # 路由配置
-│   │   ├── App.vue               # 根组件
-│   │   └── main.js               # 应用入口
-│   ├── public/                   # 静态资源（包含default.jpg默认头像）
-│   ├── package.json              # 依赖配置
-│   └── vite.config.js            # Vite配置
-├── spider/                       # 爬虫模块
-│   ├── minzu_festivals_spider.py # 民族文化资源库爬虫
-│   ├── wikipedia_spider.py       # 维基百科爬虫
-│   ├── run_spiders.py            # 爬虫运行脚本
-│   └── README.md                 # 爬虫说明
-├── database_files/               # 数据库相关文件
-│   ├── init_schema.sql           # 数据库初始化脚本（包含所有17个表结构）
-│   ├── run_init_schema.py        # 自动执行SQL脚本的Python工具
-│   ├── erdiagram.md              # ER图（Mermaid格式）
-│   └── readme.md                 # 数据库说明
-├── uploads/                      # 用户上传的资源文件存储目录
-│   └── 文件命名格式：用户名-日期-时间.扩展名
-├── AIGC_graph/                   # AIGC生成的图片存储目录
-├── crawled_images/               # 爬虫抓取的图片存储目录
-├── chroma_db/                    # 文本向量数据库
-├── chroma_db_image/              # 图像向量数据库
-├── chroma_db_web/                # Web向量数据库
-├── chroma_db_annotation/         # 标注向量数据库
-├── db_connection.py              # 数据库连接管理（统一配置）
-├── login.py                      # 用户登录认证系统
-├── upload_handler.py             # 用户上传处理
-├── user_review_system.py         # 用户评论与评价系统
-├── search_service.py             # 搜索服务
-├── festival_name_utils.py        # 节日名称转换工具
-├── entity_type_utils.py          # 实体类型工具
-├── requirements.txt              # Python依赖列表
-├── install_dependencies.py       # 自动安装依赖脚本
-├── start_dev.bat                 # Windows启动脚本
-├── start_dev.sh                  # Linux/Mac启动脚本
-└── README.md                     # 项目主文档
+AI模型
 
-2.2 数据流向
-------------
-1. 爬虫数据：
-   - 文字数据 → cultural_resources（title=节日名称）+ cultural_entities（entity_name=资源名称）
-   - 图片数据 → crawled_images
-
-2. AIGC生成数据：
-   - 文字数据 → AIGC_cultural_resources（title=节日名称）+ AIGC_cultural_entities（entity_name=资源名称）
-   - 图片数据 → AIGC_graph
-
-3. 用户上传数据：
-   - 待审核数据 → cultural_resources_from_user
-   - 审核通过后 → cultural_resources
-
-4. AIGC对话记录：
-   - 会话信息 → qa_sessions
-   - 对话消息 → qa_messages
-
-5. 标注任务：
-   - 标注任务 → annotation_tasks（通过resource_source字段关联不同的资源表）
-   - 标注记录 → annotation_records（使用扁平化字段结构）
-
-6. 用户评分和评论：
-   - 评分数据 → user_ratings
-   - 评论数据 → user_comments
-   - 回复数据 → comment_replies
+- 文字生成: 通义千问 (Tongyi) / OpenAI GPT
+- 图像生成: 火山引擎 Seedream (Huoshan) / 通义千问
+- 图像理解: 通义千问多模态模型
 
 ================================================================================
-三、数据库设计
-================================================================================
 
-3.1 数据库概述
---------------
-- 数据库名称：java_project
-- 字符集：utf8mb4
-- 表数量：17个
-- 视图数量：17个（每个表对应一个只读视图）
+数据库设计
 
-3.2 核心表结构
---------------
+核心表结构
 
-1. users（用户表）
-   - id: 主键
-   - username: 用户名（唯一）
-   - password_hash: 密码哈希值（SHA-256）
-   - role: 角色（普通用户/管理员）
-   - nickname: 用户昵称
-   - avatar_path: 头像路径
-   - security_question: 安全问题
-   - security_answer_hash: 安全问题答案哈希值
+1. 用户表 (users)
 
-2. cultural_resources（文化资源表）
-   - id: 主键
-   - title: 节日名称
-   - resource_type: 资源类型
-   - file_format: 文件格式
-   - source_from: 数据来源
-   - source_url: 原始URL
-   - content_feature_data: 内容数据（JSON格式）
-   - upload_user_id: 上传用户ID（外键，可NULL）
-   - ai_review_status: AI审核状态
-   - manual_review_status: 人工审核状态
+CREATE TABLE users (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  account VARCHAR(20) UNIQUE NOT NULL COMMENT '用户账号（8-10位数字，系统自动生成，永久不可修改）',
+  password_hash VARCHAR(255) NOT NULL COMMENT '加密后的密码（SHA-256）',
+  role ENUM('普通用户', '管理员') DEFAULT '普通用户',
+  nickname VARCHAR(100) COMMENT '用户昵称（可修改）',
+  avatar_path VARCHAR(255) DEFAULT '/default.jpg',
+  security_question VARCHAR(255) COMMENT '自定义安全问题',
+  security_answer_hash VARCHAR(255) COMMENT '安全问题答案哈希',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
-3. cultural_entities（文化实体表）
-   - id: 主键
-   - entity_name: 实体名称
-   - entity_type: 实体类型（ENUM: 人物/作品/事件/地点/其他）
-   - description: 描述
-   - source: 来源
-   - period_era: 时期年代
-   - geo_coordinates: 地理坐标
-   - cultural_region: 文化区域
-   - style_features: 风格特征
-   - cultural_value: 文化价值
-   - related_images_url: 相关图像链接
-   - digital_resource_link: 数字资源链接
-   - 全文索引：entity_name, description
+设计要点：
+- `account` 字段：系统自动生成的8-10位数字账号，唯一且不可修改
+- `password_hash`：使用SHA-256单向哈希加密
+- `role`：枚举类型，区分普通用户和管理员
 
-4. entity_relationships（实体关系表）
-   - id: 主键
-   - source_entity_id: 源实体ID（外键）
-   - target_entity_id: 目标实体ID（外键）
-   - relationship_type: 关系类型
-   - relationship_strength: 关系强度
-   - relationship_evidence: 关系证据
-   - spatiotemporal_constraint: 时空约束
-   - confidence_score: 置信度评分
+2. 文化资源表 (cultural_resources)
 
-5. user_behavior_logs（用户行为日志表）
-   - id: 主键
-   - user_id: 用户ID（外键）
-   - behavior_type: 行为类型（ENUM: 检索/交互/生成/标注）
-   - content: 行为内容
-   - timestamp: 时间戳
+存储爬虫抓取或用户上传的原始文化素材。
 
-6. qa_sessions（问答会话表）
-   - id: 主键
-   - user_id: 用户ID（外键）
-   - created_at: 创建时间
-   - summary: 会话摘要
+关键字段：
+- `title`: 节日名称（英文）
+- `content_feature_data`: JSON格式的文本内容和元数据
+- `upload_user_id`: 上传用户ID（外键，级联删除时设为NULL）
 
-7. qa_messages（问答消息表）
-   - id: 主键
-   - user_id: 用户ID（外键）
-   - session_id: 会话ID（外键）
-   - create_time: 创建时间
-   - user_message: 用户输入的信息
-   - ai_message: AI的回答
-   - user_feedback: 用户反馈
-   - timestamp: 时间戳
-   - model: 模型类型（ENUM: text/image）
-   - image_url: 图片URL（图片AIGC时存储）
-   - image_from_users_url: 用户上传的图片URL
+3. 文化实体表 (cultural_entities)
 
-8. annotation_tasks（标注任务表）
-   - id: 主键
-   - resource_id: 关联的资源ID
-   - resource_source: 资源来源（ENUM: cultural_resources/cultural_resources_from_user）
-   - task_type: 任务体系（ENUM: 实体/质量/语义）
-   - annotation_method: 标注方式（ENUM: ai/manual）
-   - status: 任务状态
-   - required_annotators: 需要的标注人数
+存储从资源中提取的结构化实体信息。
 
-9. annotation_records（标注记录表）
-   - id: 主键
-   - task_id: 任务ID（外键）
-   - annotator_id: 标注者ID（外键）
-   - annotation_data: 标注数据（JSON格式，保留兼容性）
-   - annotation_source: 标注来源（ENUM: ai/manual）
-   - is_expert_reviewed: 是否经过专家审核
-   - reviewer_id: 审核专家ID（外键，可NULL）
-   - created_at: 标注提交时间
-   - is_latest: 是否为最新标注结果
-   - create_time: 标注时间
-   - 扁平化字段（新增）：
-     * entity_name: 实体名称
-     * entity_type: 实体类型（ENUM: 人物/作品/事件/地点/其他）
-     * description: 描述
-     * source: 来源
-     * period_era: 时期年代
-     * geo_coordinates: 地理坐标
-     * cultural_region: 文化区域
-     * style_features: 风格特征
-     * cultural_value: 文化价值
-     * related_images_url: 相关图像链接
-     * digital_resource_link: 数字资源链接
+关键字段：
+- `entity_name`: 实体名称（中文，已清洗）
+- `entity_type`: ENUM类型（'人物', '作品', '事件', '地点', '其他'）
+- `description`: 详细描述（已清洗）
 
-10. cultural_resources_from_user（用户上传资源表）
-    - id: 主键
-    - user_id: 上传用户ID（外键）
-    - title: 节日
-    - resource_type: 资源类型
-    - file_format: 文件格式
-    - content_feature_data: 内容数据（JSON格式，包含文件名、用户名、上传时间等信息）
-    - content_hash: 内容哈希值（SHA-256，用于查重）
-    - ai_review_status: AI审核状态（ENUM: pending/passed/failed）
-    - manual_review_status: 人工审核状态（ENUM: pending/passed/failed）
-    - upload_time: 上传时间
-    - review_notes: 审核备注
+4. 爬虫图片表 (crawled_images)
 
-11. AIGC_cultural_resources（AIGC文化资源表）
-    - id: 主键
-    - title: 节日名称
-    - resource_type: 资源类型
-    - file_format: 文件格式
-    - source_from: 数据来源（AIGC模型名称）
-    - source_url: 原始URL链接
-    - content_feature_data: 内容数据
-    - version: 版本号
-    - created_at: 创建时间
-    - updated_at: 更新时间
+存储爬虫抓取的图片元数据。
 
-12. AIGC_graph（AIGC生成图像表）
-    - id: 主键
-    - file_name: 文件名
-    - storage_path: 存储路径（唯一）
-    - dimensions: 尺寸
-    - upload_time: 上传时间
-    - tags: 标签（JSON数组格式）
+关键字段：
+- `file_name`: 文件名（如 "8.jpg" 或 "8-1.jpg"）
+- `storage_path`: 存储路径（如 "crawled_images/8.jpg"）
+- `resource_id`: 关联的文化资源ID（外键，可为NULL）
+- `entity_id`: 关联的文化实体ID（外键，可为NULL）
+- `festival_name`: 节日名称（中文，用于快速查询）
+- `tags`: JSON数组格式的标签（已清洗，移除纯数字等无关信息）
 
-13. crawled_images（爬虫抓取图像表）
-    - id: 主键
-    - file_name: 文件名
-    - storage_path: 存储路径（唯一）
-    - dimensions: 尺寸
-    - crawl_time: 抓取时间
-    - tags: 标签（JSON数组格式）
+关联关系：
+- 如果图片属于某个文字资源，`resource_id` 和 `entity_id` 不为NULL
+- 如果图片是独立抓取的，`resource_id` 和 `entity_id` 为NULL
 
-14. AIGC_cultural_entities（AIGC文化实体表）
-    - id: 主键
-    - entity_name: 实体名称
-    - entity_type: 实体类型（ENUM: 人物/作品/事件/地点/其他）
-    - description: 描述
-    - source: 来源
-    - period_era: 时期年代
-    - geo_coordinates: 地理坐标
-    - cultural_region: 文化区域
-    - style_features: 风格特征
-    - cultural_value: 文化价值
-    - related_images_url: 相关图像链接
-    - digital_resource_link: 数字资源链接
-    - 全文索引：entity_name, description
+5. 用户访问日志表 (user_access_logs)
 
-15. user_ratings（用户评分表）
-    - id: 主键
-    - resource_id: 关联文化资源ID（外键）
-    - user_id: 关联用户ID（外键）
-    - rating: 评分（1-5分）
-    - rating_dimension: 评分维度（overall/accuracy/usefulness/completeness）
-    - rated_at: 评分时间
-    - 唯一约束：user_id, resource_id, rating_dimension
+记录所有用户访问行为。
 
-16. user_comments（用户评论表）
-    - id: 主键
-    - resource_id: 关联文化资源ID（外键）
-    - user_id: 关联用户ID（外键）
-    - comment_content: 评论内容
-    - comment_status: 评论状态（pending/approved/rejected）
-    - is_academic_discussion: 是否学术讨论
-    - reviewer_id: 审核人ID（外键，可NULL）
-    - reviewed_at: 审核时间
-    - created_at: 评论创建时间
-    - updated_at: 评论更新时间
+关键字段：
+- `user_id`: 用户ID（可为NULL，表示未登录访问）
+- `access_type`: 访问类型（'page_view', 'aigc_text', 'aigc_image', 'search', 'upload'等）
+- `access_detail`: JSON格式的访问详情
+- `ip_address`: 用户IP地址
+- `user_agent`: 用户代理字符串
 
-17. comment_replies（评论回复表）
-    - id: 主键
-    - comment_id: 关联评论ID（外键）
-    - reply_user_id: 回复用户ID（外键）
-    - reply_content: 回复内容
-    - created_at: 回复创建时间
+数据关联关系
 
-3.3 视图
---------
-系统为每个表创建了对应的只读视图（v_表名），便于统一查询与权限控制。
-
-3.4 索引策略
-------------
-- 主键自动创建聚簇索引
-- 外键字段创建索引
-- 全文索引：cultural_entities和AIGC_cultural_entities的entity_name和description字段
-- 唯一索引：users.username, cultural_resources.source_url, user_ratings复合唯一索引等
+cultural_resources (1) ──< (N) crawled_images
+cultural_entities (1) ──< (N) crawled_images
+users (1) ──< (N) qa_sessions
+qa_sessions (1) ──< (N) qa_messages
+users (1) ──< (N) user_access_logs
 
 ================================================================================
-四、核心模块实现
-================================================================================
 
-4.1 数据库连接管理（db_connection.py）
----------------------------------------
-功能：
-- 统一的数据库连接配置管理
-- 支持从环境变量读取配置
-- 支持用户级别的数据库连接（数据隔离）
-- 默认使用root账户，其他模块使用登录用户账户
+核心功能实现
 
-关键函数：
-- get_user_db_config(user_id=None): 获取数据库配置
-- get_user_db_connection(user_id=None): 获取数据库连接
+1. 用户认证系统
 
-4.2 用户认证系统（login.py）
------------------------------
-功能：
-- 用户注册（支持昵称、头像、安全问题设置）
-- 用户登录（用户名密码验证）
-- 密码管理（修改密码、忘记密码）
-- 用户信息查询
+账号生成逻辑
 
-关键类：
-- AuthSystem: 认证系统主类
-
-安全特性：
-- 密码使用SHA-256哈希加密
-- 安全问题答案也使用SHA-256加密
-- 支持自定义安全问题找回密码
-
-4.3 资源上传处理（upload_handler.py）
--------------------------------------
-功能：
-- 处理用户上传的文本和图片资源
-- 文件哈希查重（SHA-256）
-- 自动创建标注任务
-- 触发AI标注
-- 保存人工标注
-- 标注审核和数据迁移
-
-关键类：
-- ResourceUploader: 资源上传器
-
-文件命名规则：
-- 格式：用户名-日期-时间.扩展名
-- 示例：admin-2024-01-15-14-30-25.jpg
-- 如果同一用户同一秒上传多个文件，自动添加序号
-
-4.4 AIGC API服务器（AIGC/aigc_api_server.py）
----------------------------------------------
-功能：
-- 提供Flask RESTful API接口
-- 文字AIGC（基于RAG的智能问答）
-- 图片AIGC（图像生成）
-- 会话管理（创建、查询、删除）
-- 资源管理（查询、上传）
-- 标注任务管理
-- 用户认证相关接口
-- 静态文件服务
-
-主要API端点：
-- POST /api/aigc/chat: AIGC聊天接口
-- POST /api/aigc/sessions: 创建新会话
-- GET /api/aigc/sessions: 获取会话列表
-- GET /api/aigc/sessions/{session_id}/messages: 获取会话消息
-- DELETE /api/aigc/sessions/{session_id}: 删除单个会话
-- DELETE /api/aigc/sessions/batch: 批量删除会话
-- DELETE /api/aigc/sessions/all: 删除所有会话
-- POST /api/annotation/tasks/{task_id}/approve: 审核通过标注
-- POST /api/annotation/tasks/{task_id}/reject: 驳回标注
-- GET /api/annotation/tasks/{task_id}/details: 获取标注详情
-- PUT /api/annotation/tasks/{task_id}: 更新标注
-
-4.5 RAG系统（AIGC/RAG.py）
----------------------------
-功能：
-- 基于向量数据库的检索增强生成
-- 文本分割和向量化
-- 相似度检索
-- 关键词检索
-- 上下文管理
-
-技术实现：
-- 向量数据库：ChromaDB
-- 文本分割：LangChain TextSplitter
-- 嵌入模型：支持多种嵌入模型
-- 检索策略：相似度检索 + 关键词检索
-
-4.6 图像生成系统（AIGC/image_RAG.py）
--------------------------------------
-功能：
-- 图像生成（使用火山引擎Seedream模型）
-- 图片理解（使用图文互搜的图片理解逻辑）
-- 风格迁移
-- 图片存储和管理
-
-4.7 爬虫模块（spider/）
-----------------------
-功能：
-- 民族文化资源库爬虫（minzu_festivals_spider.py）
-- 维基百科爬虫（wikipedia_spider.py）
-- 自动图片下载和存储
-- 自动标签提取
-- 智能图片过滤（过滤logo、图标、横幅、二维码等）
+def _generate_random_account(self) -> str:
+    """生成随机账号（8-10位数字字符串）"""
+    import random
+    length = random.randint(8, 10)
+    # 生成8-10位数字字符串，第一位不能是0
+    first_digit = random.randint(1, 9)
+    rest_digits = ''.join([str(random.randint(0, 9)) for _ in range(length - 1)])
+    return str(first_digit) + rest_digits
 
 特点：
-- 递增式图片命名（1.jpg, 2.jpg, ...）
-- 自动检查最大序号
-- 数据自动存储到数据库
-- 支持文字和图片数据爬取
+- 自动生成唯一账号
+- 最多尝试100次确保唯一性
+- 账号一旦生成永久不可修改
 
-4.8 用户评论与评价系统（user_review_system.py）
-------------------------------------------------
-功能：
-- 用户评分管理（多维度评分）
-- 用户评论管理
-- 评论回复管理
-- 评论审核功能
+密码加密
 
-关键类：
-- UserReviewSystem: 用户评论与评价系统主类
+使用SHA-256单向哈希算法：
 
-主要方法：
-- add_or_update_rating(): 添加或更新评分
-- get_resource_ratings(): 获取资源的所有评分
-- get_resource_average_rating(): 获取资源的平均评分
-- add_comment(): 添加评论
-- get_resource_comments(): 获取资源的评论列表
-- add_reply(): 添加回复
+def _hash_password(self, password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
 
-================================================================================
-五、关键技术实现
-================================================================================
+2. 数据爬取系统
 
-5.1 文件上传处理
-----------------
-流程：
-1. 接收文件数据
-2. 生成唯一文件名（用户名-日期-时间格式）
-3. 保存文件到uploads/目录
-4. 计算文件哈希值（SHA-256）
-5. 查重校验
-6. 提取节日名称（从文件名或内容）
-7. 保存到cultural_resources_from_user表
-8. 创建标注任务
-9. 触发AI标注（后台线程）
+图片命名规则
 
-文件命名规则：
-- 格式：{用户名}-{YYYY-MM-DD}-{HH-MM-SS}.扩展名
-- 如果文件已存在，添加序号：{用户名}-{日期}-{时间}-{序号}.扩展名
-- 用户名中的特殊字符会被替换为下划线
+单图片资源：
+- 格式：`{序号}.jpg`（如：`8.jpg`）
 
-5.2 标注系统实现
-----------------
-标注记录表结构：
-- 保留annotation_data字段（JSON格式）用于兼容旧数据
-- 新增扁平化字段，符合cultural_entities表结构标准
-- 支持AI标注和人工标注
-- 支持专家审核
+多图片资源：
+- 格式：`{基准序号}-{子序号}.jpg`（如：`8-1.jpg`, `8-2.jpg`, `8-3.jpg`）
+- 规则：如果检测到资源有多张图片（>=2），所有图片都使用分组命名
 
-标注流程：
-1. 用户上传资源 → 自动创建标注任务
-2. AI自动标注 → 保存到annotation_records（使用扁平化字段）
-3. 用户可编辑标注 → 更新annotation_records
-4. 管理员审核 → 标记is_expert_reviewed
-5. 审核通过 → 数据迁移到cultural_entities和cultural_resources
+数据清洗逻辑
 
-5.3 RAG检索增强生成
--------------------
-实现流程：
-1. 用户输入问题
-2. 文本分割和向量化
-3. 向量数据库检索（相似度检索）
-4. 关键词检索（补充）
-5. 构建上下文
-6. 调用AI模型生成回答
-7. 返回结果并保存对话记录
+中华民族资源库数据清洗：
+- 移除分页信息（"上一页 下一页 总记录数"等）
+- 移除日期格式（如"中元节2019-08-14"）
+- 移除重复的节日名称行
+- 移除纯节日名称列表项
 
-向量数据库：
-- chroma_db: 文本向量数据库
-- chroma_db_image: 图像向量数据库
-- chroma_db_web: Web向量数据库
-- chroma_db_annotation: 标注向量数据库
+维基百科数据清洗：
+- 移除引用标记（如`[1]`、`[注 1]`）
+- 移除编辑链接标记（如`[编辑]`）
+- 移除分类信息
 
-5.4 图片生成流程
-----------------
-实现流程：
-1. 接收用户输入（文字提示词或图片）
-2. 如果上传图片，使用图片理解逻辑分析图片内容
-3. 如果没有文字提示，自动生成故事
-4. 调用图片生成API（火山引擎Seedream）
-5. 保存生成的图片到AIGC_graph/目录
-6. 保存元数据到AIGC_graph表
-7. 返回图片URL
+Tags清洗：
+- 移除纯数字标签（URL路径中的ID）
+- 移除空字符串和太短的标签（<2字符）
+- 保留有意义的标签（节日名称、文化关键词等）
 
-5.5 用户认证和安全
-------------------
-密码加密：
-- 算法：SHA-256单向哈希
-- 存储：只存储哈希值，不存储明文密码
-- 验证：登录时对输入密码进行哈希后比较
+3. AIGC系统
 
-安全问题：
-- 支持自定义安全问题
-- 安全问题答案也使用SHA-256加密
-- 用于找回密码功能
+RAG检索增强生成
 
-会话管理：
-- 使用Flask的session机制
-- 前端使用localStorage存储用户信息
-- 自动验证用户信息有效性
+工作流程：
+1. 用户输入问题或上传图片
+2. 如果上传图片，先进行图像理解
+3. 从向量数据库中检索相关文化资源
+4. 将检索结果作为上下文，调用AI模型生成回答
+5. 保存对话记录到数据库
 
-5.6 数据迁移机制
-----------------
-标注审核通过后的数据迁移：
-1. 从annotation_records获取标注数据（扁平化字段）
-2. 根据任务类型迁移到不同表：
-   - 实体类型 → cultural_entities表
-3. 如果资源来源是cultural_resources_from_user：
-   - 迁移资源到cultural_resources表
-   - 更新原资源表的审核状态
-4. 如果是图像资源：
-   - 迁移到crawled_images表
-5. 更新任务状态为"已完成"
+延迟加载优化：
+- RAG系统和ImageAIGC系统采用延迟加载
+- 只在用户首次使用时才初始化
+- 显著减少系统启动时间（从19194ms降至数秒）
+
+图像生成
+
+工作流程：
+1. 用户输入提示词或上传参考图片
+2. 如果没有提示词，自动生成故事
+3. 调用图像生成API（Huoshan模型）
+4. 保存生成的图片到本地和数据库
+
+4. 数据关联系统
+
+文字资源与图片的关联：
+- 爬虫先保存文字资源，获取`resource_id`和`entity_id`
+- 保存图片时，将`resource_id`和`entity_id`写入`crawled_images`表
+- 如果只有图片没有文字，图片的`resource_id`和`entity_id`为NULL
+
+查询优化：
+- 通过`festival_name`字段快速查询某个节日的所有图片
+- 通过`resource_id`查询某个文字资源的所有图片
+- 通过`entity_id`查询某个文化实体的所有图片
 
 ================================================================================
-六、API接口规范
-================================================================================
 
-6.1 认证相关接口
-----------------
-POST /api/register
-- 功能：用户注册
-- 参数：username, password, nickname(可选), avatar(可选), security_question(可选), security_answer(可选)
-- 返回：注册结果
+API接口文档
 
-POST /api/login
-- 功能：用户登录
-- 参数：username, password
-- 返回：登录结果和用户信息
+认证相关
 
-POST /api/change-password
-- 功能：修改密码
-- 请求头：X-User-Id
-- 参数：old_password, new_password
-- 返回：修改结果
+POST /api/auth/register
+用户注册（自动生成账号）
 
-POST /api/forgot-password
-- 功能：忘记密码
-- 参数：username, security_answer, new_password
-- 返回：重置结果
+请求体：
+{
+  "password": "用户密码",
+  "nickname": "用户昵称（可选）",
+  "security_question": "安全问题（可选）",
+  "security_answer": "安全问题答案（可选）"
+}
 
-6.2 AIGC相关接口
-----------------
-POST /api/aigc/chat
-- 功能：AIGC聊天（文字或图片生成）
-- 请求头：X-User-Id
-- 参数：mode(text/image), query(可选), images(可选), session_id(可选), stream(可选)
-- 返回：生成结果（流式或JSON格式）
+响应：
+{
+  "success": true,
+  "message": "注册成功！您的账号：12345678，请妥善保管，可直接登录。",
+  "user_info": {
+    "id": 1,
+    "account": "12345678",
+    "nickname": "用户昵称",
+    "role": "普通用户"
+  }
+}
 
-POST /api/aigc/sessions
-- 功能：创建新会话
-- 请求头：X-User-Id
-- 参数：summary(可选)
-- 返回：会话ID
+POST /api/auth/login
+用户登录
 
-GET /api/aigc/sessions
-- 功能：获取会话列表
-- 请求头：X-User-Id
-- 查询参数：user_id
-- 返回：会话列表
+请求体：
+{
+  "account": "12345678",
+  "password": "用户密码"
+}
 
-GET /api/aigc/sessions/{session_id}/messages
-- 功能：获取会话消息
-- 请求头：X-User-Id
-- 返回：消息列表
+POST /api/auth/update-nickname
+修改用户昵称
 
-DELETE /api/aigc/sessions/{session_id}
-- 功能：删除单个会话
-- 请求头：X-User-Id
-- 返回：删除结果
+请求头：
+- `X-User-Id`: 用户ID
 
-DELETE /api/aigc/sessions/batch
-- 功能：批量删除会话
-- 请求头：X-User-Id
-- 参数：session_ids（数组）
-- 返回：删除结果
+请求体：
+{
+  "nickname": "新昵称"
+}
 
-DELETE /api/aigc/sessions/all
-- 功能：删除所有会话
-- 请求头：X-User-Id
-- 返回：删除结果
+资源相关
 
-6.3 标注相关接口
-----------------
-GET /api/annotation/tasks
-- 功能：获取标注任务列表
-- 请求头：X-User-Id
-- 查询参数：user_id, status(可选)
-- 返回：任务列表（包含文件名、用户名、上传时间等信息）
-
-GET /api/annotation/tasks/{task_id}/details
-- 功能：获取标注详情
-- 请求头：X-User-Id
-- 返回：标注详情（使用扁平化字段结构）
-
-PUT /api/annotation/tasks/{task_id}
-- 功能：更新标注
-- 请求头：X-User-Id
-- 参数：支持新格式（扁平化字段）和旧格式（entities数组）
-- 返回：更新结果
-
-POST /api/annotation/tasks/{task_id}/approve
-- 功能：审核通过标注并迁移数据
-- 请求头：X-User-Id（必须是管理员）
-- 返回：迁移结果
-
-POST /api/annotation/tasks/{task_id}/reject
-- 功能：驳回标注
-- 请求头：X-User-Id（必须是管理员）
-- 参数：reason（驳回原因）
-- 返回：驳回结果
-
-6.4 资源相关接口
-----------------
 GET /api/home/resources
-- 功能：获取资源列表
-- 查询参数：page, page_size
-- 返回：资源列表和分页信息
+获取首页资源列表
 
-POST /api/upload
-- 功能：上传资源
-- 请求头：X-User-Id, Content-Type: multipart/form-data
-- 参数：file, resource_type
-- 返回：上传结果
+查询参数：
+- `page`: 页码（默认1）
+- `page_size`: 每页数量（默认12）
 
-6.5 搜索相关接口
-----------------
-POST /api/search/text-to-image
-- 功能：文本搜图片
-- 参数：query（搜索关键词）
-- 返回：匹配的图片列表
+响应：
+{
+  "success": true,
+  "resources": [
+    {
+      "id": 1,
+      "festival_name": "中元节",
+      "description": "资源描述...",
+      "image_url": "/api/images/crawled/8.jpg"
+    }
+  ],
+  "total": 100,
+  "page": 1,
+  "page_size": 12
+}
 
-POST /api/search/image-to-text
-- 功能：图片搜文本
-- 参数：image（图片文件）
-- 返回：匹配的文本列表
+GET /api/resource/detail
+获取资源详情
+
+查询参数：
+- `festival_name`: 节日名称（必需）
+
+响应：
+{
+  "success": true,
+  "resource": {
+    "festival_name": "中元节",
+    "description": "详细描述...",
+    "images": [
+      {
+        "url": "/api/images/crawled/8-1.jpg",
+        "index": 1
+      }
+    ]
+  }
+}
+
+AIGC相关
+
+POST /api/aigc/chat
+AIGC聊天接口
+
+请求头：
+- `X-User-Id`: 用户ID
+
+请求体（multipart/form-data）：
+- `mode`: 'text' 或 'image'
+- `query`: 用户输入（可选）
+- `images`: 图片文件（可选）
+- `session_id`: 会话ID（可选）
+
+响应：Server-Sent Events (SSE) 流式输出
+
+管理员相关
+
+GET /api/admin/dashboard/statistics
+获取数据大屏统计信息
+
+请求头：
+- `X-User-Id`: 用户ID（必须是管理员）
+
+响应：
+{
+  "success": true,
+  "statistics": {
+    "total_users": 100,
+    "today_users": 10,
+    "total_text_aigc_users": 50,
+    "today_text_aigc_users": 5,
+    "total_image_aigc_users": 30,
+    "today_image_aigc_users": 3,
+    "trend_data": [
+      {
+        "date": "2024-01-15",
+        "visits": 10,
+        "text_aigc": 5,
+        "image_aigc": 3
+      }
+    ]
+  }
+}
+
+POST /api/admin/log-access
+记录用户访问日志
+
+请求体：
+{
+  "user_id": 1,
+  "access_type": "page_view",
+  "access_detail": {
+    "page": "/dashboard"
+  }
+}
 
 ================================================================================
-七、部署和配置
+
+代码规范与最佳实践
+
+Python代码规范
+
+1. 命名规范：
+   - 类名：大驼峰（`AuthSystem`）
+   - 函数名：小写下划线（`get_user_by_id`）
+   - 私有方法：单下划线前缀（`_hash_password`）
+   - 常量：全大写下划线（`MAX_RETRY_COUNT`）
+
+2. 错误处理：
+   - 使用try-except捕获异常
+   - 记录详细的错误日志
+   - 返回用户友好的错误消息
+
+3. 数据库操作：
+   - 使用上下文管理器（`with conn.cursor()`）
+   - 及时提交或回滚事务
+   - 关闭数据库连接
+
+4. 代码复用：
+   - 避免重复代码
+   - 提取公共函数
+   - 使用配置常量而非硬编码
+
+Vue.js代码规范
+
+1. 组件结构：
+   - 使用Composition API
+   - `<script setup>` 语法
+   - 单一职责原则
+
+2. 状态管理：
+   - 使用`ref`和`reactive`管理状态
+   - 避免过度使用全局状态
+   - 合理使用`computed`和`watch`
+
+3. API调用：
+   - 统一错误处理
+   - 显示加载状态
+   - 用户友好的错误提示
+
+已修复的代码质量问题
+
+1. 硬编码问题：
+   - ✅ 移除硬编码的数据库密码
+   - ✅ 使用环境变量配置
+   - ✅ 提取魔法数字为常量
+
+2. 重复代码：
+   - ✅ 统一数据库连接管理（`db_connection.py`）
+   - ✅ 统一日志记录（`user_logging.py`）
+   - ✅ 统一错误处理模式
+
+3. 命名不一致：
+   - ✅ 统一使用`account`替代`username`
+   - ✅ 统一字段命名规范
+
+4. 性能优化：
+   - ✅ 延迟加载AI模型（减少启动时间）
+   - ✅ 数据库索引优化
+   - ✅ 图片懒加载
+
 ================================================================================
 
-7.1 环境要求
-------------
+部署与运维
+
+环境要求
+
 - Python 3.7+
 - Node.js 16+
 - MySQL 5.7+
-- 至少4GB内存（推荐8GB）
+- 至少2GB内存
 
-7.2 安装步骤
-------------
-1. 克隆项目
-2. 运行 install_dependencies.py 安装所有依赖
-3. 配置数据库（运行 database_files/run_init_schema.py）
-4. 配置环境变量（.env文件）
-5. 启动服务（使用 start_dev.bat 或 start_dev.sh）
+部署步骤
 
-7.3 环境变量配置
-----------------
-必需配置：
-- MYSQL_HOST: 数据库主机（默认：127.0.0.1）
-- MYSQL_PORT: 数据库端口（默认：3306）
-- MYSQL_USER: 数据库用户（默认：root）
-- MYSQL_PASSWORD: 数据库密码
-- MYSQL_DB: 数据库名称（默认：java_project）
+1. 安装依赖：
+python install_dependencies.py
 
-AI模型配置（至少配置一个）：
-- DASHSCOPE_API_KEY: 阿里云通义千问API密钥
-- OPENAI_API_KEY: OpenAI API密钥（备选）
-- VOLC_SEEDREAM_API_KEY: 火山引擎Seedream API密钥
+2. 初始化数据库：
+python database_files/run_init_schema.py
 
-7.4 启动方式
-------------
-方式一：一键启动（推荐）
-- Windows: start_dev.bat
-- Linux/Mac: ./start_dev.sh
+3. 配置环境变量：
+创建`.env`文件，配置数据库和API密钥
 
-方式二：分别启动
-- 前端：cd FrontEnd && npm run dev
-- 后端：python AIGC/aigc_api_server.py
+4. 启动服务：
+Windows
+start_dev.bat
 
-7.5 端口配置
-------------
-- 前端开发服务器：5173
-- 后端API服务器：8000
-- 前端通过Vite代理访问后端（/api/* → http://localhost:8000）
+Linux/Mac
+./start_dev.sh
 
-================================================================================
-八、安全考虑
-================================================================================
+监控与日志
 
-8.1 密码安全
-------------
-- 使用SHA-256单向哈希算法
-- 不存储明文密码
-- 登录时进行哈希比较
+- 访问日志：存储在`user_access_logs`表
+- 错误日志：后端控制台输出
+- 数据统计：管理员数据大屏
 
-8.2 数据隔离
-------------
-- 不同用户使用不同的数据库连接（通过user_id）
-- 普通用户只能看到自己上传的资源
-- 管理员可以看到所有资源
+备份策略
 
-8.3 文件安全
-------------
-- 文件上传时进行哈希查重
-- 文件名使用安全格式（清理特殊字符）
-- 文件路径验证（防止路径遍历攻击）
+1. 数据库备份：
+   - 定期备份MySQL数据库
+   - 建议每日备份
 
-8.4 API安全
-------------
-- 使用请求头X-User-Id进行用户身份验证
-- 敏感操作需要管理员权限
-- 输入验证和SQL注入防护
+2. 文件备份：
+   - `crawled_images/`：爬虫图片
+   - `AIGC_graph/`：AIGC生成图片
+   - `FrontEnd/public/`：用户头像
+
+性能优化建议
+
+1. 数据库优化：
+   - 定期清理历史日志数据
+   - 优化慢查询
+   - 使用连接池
+
+2. 缓存策略：
+   - 考虑使用Redis缓存热点数据
+   - 静态资源使用CDN
+
+3. 图片优化：
+   - 压缩大图片
+   - 使用WebP格式
+   - 实现图片懒加载
 
 ================================================================================
-九、性能优化
-================================================================================
 
-9.1 数据库优化
---------------
-- 主键自动创建聚簇索引
-- 外键字段创建索引
-- 全文索引用于搜索
-- 视图用于统一查询
+常见问题排查
 
-9.2 向量数据库
---------------
-- 使用ChromaDB进行向量检索
-- 支持多种嵌入模型
-- 相似度检索和关键词检索结合
-
-9.3 异步处理
-------------
-- AI标注使用后台线程处理
-- 避免阻塞主请求
-- 支持长时间运行的AI任务
-
-9.4 缓存策略
-------------
-- 向量数据库缓存检索结果
-- 前端localStorage缓存用户信息
-- 会话数据持久化到数据库
-
-================================================================================
-十、扩展开发指南
-================================================================================
-
-10.1 添加新的API接口
---------------------
-1. 在 AIGC/aigc_api_server.py 中添加路由
-2. 实现业务逻辑
-3. 添加错误处理
-4. 更新API文档
-
-10.2 添加新的数据库表
----------------------
-1. 在 database_files/init_schema.sql 中添加表定义
-2. 创建对应的视图
-3. 更新 erdiagram.md
-4. 更新 database_files/readme.md
-
-10.3 添加新的爬虫
------------------
-1. 创建新的爬虫文件（如 new_spider.py）
-2. 实现类结构：
-   - _connect_db(): 连接数据库
-   - _get_current_max_index(): 获取当前最大序号
-   - _download_image(): 下载图片
-   - _save_to_database(): 保存到数据库
-   - run(): 运行爬虫
-   - close(): 关闭连接
-3. 在 run_spiders.py 中添加调用
-
-10.4 添加新的前端组件
----------------------
-1. 在 FrontEnd/src/components/ 中创建Vue组件
-2. 使用 Composition API 和 <script setup> 语法
-3. 在 router/index.js 中添加路由
-4. 更新导航菜单（如需要）
-
-================================================================================
-十一、故障排除
-================================================================================
-
-11.1 常见问题
--------------
 1. 数据库连接失败
-   - 检查MySQL服务是否运行
-   - 验证环境变量配置
-   - 检查数据库用户权限
+
+检查项：
+- MySQL服务是否运行
+- `.env`文件配置是否正确
+- 数据库用户权限
 
 2. API请求失败
-   - 检查后端服务器是否运行
-   - 验证API密钥配置
-   - 查看后端日志
+
+检查项：
+- 后端服务是否运行（端口8000）
+- API密钥配置是否正确
+- 查看后端日志
 
 3. 图片无法显示
-   - 确认文件路径正确
-   - 检查文件权限
-   - 验证静态文件服务配置
 
-4. 前端页面空白
-   - 检查浏览器控制台错误
-   - 确认后端API服务器运行正常
-   - 检查路由配置
+检查项：
+- 图片文件是否存在
+- 文件路径是否正确
+- 文件权限设置
 
-11.2 日志位置
--------------
-- 后端日志：aigc_logs/aigc.log
-- 错误日志：aigc_logs/aigc_error.log
-- 控制台输出：实时显示
+4. AIGC功能异常
 
-11.3 调试技巧
--------------
-- 使用浏览器开发者工具查看网络请求
-- 查看后端控制台输出
-- 检查数据库数据
-- 使用test_backend.py测试后端服务
+检查项：
+- AI模型API密钥配置
+- 网络连接是否正常
+- 查看错误日志
 
 ================================================================================
-十二、版本历史
-================================================================================
 
-v1.0 (当前版本)
-- 完整的用户管理和认证系统
-- 文化资源爬取功能
-- AIGC内容生成（文字和图片）
-- 图文互搜功能
-- 资源上传和审核
-- 标注任务管理（支持扁平化字段结构）
-- 用户评分和评论系统
-- 17个数据表的完整数据库设计
+版本历史
 
-================================================================================
-附录：相关文档
-================================================================================
+v1.0.0 (当前版本)
 
-- README.md: 项目主文档
-- FOLDER_STRUCTURE.md: 文件夹结构说明
-- database_files/readme.md: 数据库详细说明
-- database_files/erdiagram.md: 数据库ER图
-- AIGC/README_AIGC.md: AIGC功能说明
-- FrontEnd/README.md: 前端使用说明
-- spider/README.md: 爬虫使用说明
+主要特性：
+- 用户注册/登录（自动生成账号）
+- 文化资源爬取与清洗
+- AIGC文字/图片生成
+- 数据大屏统计
+- 评论与通知系统
+
+技术改进：
+- 延迟加载优化启动速度
+- 数据关联优化
+- 代码质量提升
 
 ================================================================================
-技术支持
-================================================================================
 
-如有技术问题，请参考项目文档或查看代码注释。
+许可证
 
-================================================================================
+本项目遵循项目主许可证。
 

@@ -10,7 +10,12 @@
     <!-- 资源信息 -->
     <div class="resource-header" v-if="resourceInfo">
       <h1 class="festival-name">{{ resourceInfo.festival_name || resourceInfo.entity_name }}</h1>
-      <p class="resource-description">{{ resourceInfo.description }}</p>
+      <p class="resource-description" v-if="resourceInfo.description && resourceInfo.description !== '暂无简介'">
+        {{ resourceInfo.description }}
+      </p>
+      <p class="resource-description" v-else style="color: #999; font-style: italic;">
+        暂无简介
+      </p>
       <div class="resource-meta">
         <span class="meta-item">共 {{ resourceInfo.total_images || 0 }} 张图片</span>
       </div>

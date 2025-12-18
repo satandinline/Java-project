@@ -24,9 +24,9 @@ sys.path.insert(0, current_dir)
 
 load_dotenv(override=True)
 
-# 导入RAG和ImageAIGC模块（同文件夹内）
-from RAG import CulturalResourceRAG
-from image_RAG import ImageAIGC
+# 延迟导入RAG和ImageAIGC模块（避免启动时加载，提升启动速度）
+# from RAG import CulturalResourceRAG
+# from image_RAG import ImageAIGC
 from aigc_db_helper import save_aigc_text_resource, save_aigc_image, extract_festival_names
 # 导入父目录的模块
 from login import AuthSystem
@@ -63,12 +63,14 @@ image_aigc_systems = {}  # {user_id: image_aigc_system}
 search_rag_system = None
 
 def init_search_rag_system():
-    """初始化全局搜索RAG系统"""
+    """初始化全局搜索RAG系统（延迟加载）"""
     global search_rag_system
     if search_rag_system is not None:
         return search_rag_system
     
     try:
+        # 延迟导入RAG模块，避免启动时加载
+        from RAG import CulturalResourceRAG
         from langchain_community.chat_models import ChatTongyi
         from db_connection import get_default_db_connection
         
@@ -90,6 +92,7 @@ def init_search_rag_system():
 
 def save_aigc_message_to_db(user_id: int, session_id: int, user_message: str, ai_message: str, 
                             model: str, image_url: Optional[str], image_from_users_url: Optional[str] = None, db_config: Dict = None):
+    """保存AIGC消息到数据库，并记录访问日志（包括管理员）"""
     """保存AIGC消息到数据库（使用新表结构）"""
     try:
         from db_connection import get_user_db_connection
@@ -136,6 +139,19 @@ def save_aigc_message_to_db(user_id: int, session_id: int, user_message: str, ai
                             INSERT INTO qa_messages (user_id, session_id, user_message, ai_message, model, image_url)
                             VALUES (%s, %s, %s, %s, %s, %s)
                         """, (user_id, session_id, user_message, ai_message, model, image_url))
+                    
+                    # 记录访问日志（包括管理员）
+                    access_type = 'aigc_text' if model == 'text' else 'aigc_image'
+                    try:
+                        cursor.execute("""
+                            INSERT INTO user_access_logs 
+                            (user_id, access_type, access_path, resource_id, resource_type)
+                            VALUES (%s, %s, %s, %s, %s)
+                        """, (user_id, access_type, '/api/aigc/chat', session_id, 'aigc_session'))
+                    except Exception as log_error:
+                        print(f"[日志] 记录访问日志失败: {log_error}")
+                        # 不影响主流程，继续执行
+                    
                     conn.commit()
                     return True
                 else:
@@ -196,7 +212,7 @@ def get_text_model():
         return None
 
 def get_or_create_rag_system(user_id: int, db_config: Optional[Dict] = None):
-    """获取或创建用户的RAG系统"""
+    """获取或创建用户的RAG系统（延迟加载）"""
     if user_id in rag_systems:
         return rag_systems[user_id]
     
@@ -205,6 +221,9 @@ def get_or_create_rag_system(user_id: int, db_config: Optional[Dict] = None):
         return None
     
     try:
+        # 延迟导入RAG模块，避免启动时加载
+        from RAG import CulturalResourceRAG
+        
         rag_system = CulturalResourceRAG(
             model=text_model,
             persist_directory="./chroma_db_web",
@@ -219,7 +238,7 @@ def get_or_create_rag_system(user_id: int, db_config: Optional[Dict] = None):
         return None
 
 def get_or_create_image_aigc_system(user_id: int, db_config: Optional[Dict] = None):
-    """获取或创建用户的ImageAIGC系统"""
+    """获取或创建用户的ImageAIGC系统（延迟加载）"""
     if user_id in image_aigc_systems:
         return image_aigc_systems[user_id]
     
@@ -228,6 +247,9 @@ def get_or_create_image_aigc_system(user_id: int, db_config: Optional[Dict] = No
         return None
     
     try:
+        # 延迟导入ImageAIGC模块，避免启动时加载
+        from image_RAG import ImageAIGC
+        
         # 设置图片保存目录为项目根目录的AIGC_graph文件夹
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         aigc_graph_dir = os.path.join(base_dir, "AIGC_graph")
@@ -357,9 +379,14 @@ def register():
     """用户注册接口"""
     try:
         # 处理表单数据（可能包含文件）
+        password = None
+        nickname = None
+        security_question = None
+        security_answer = None
+        avatar_path = '/default.jpg'
+        
         if request.is_json:
             data = request.json
-            username = data.get('username', '').strip()
             password = data.get('password', '').strip()
             nickname = data.get('nickname', '').strip()
             security_question = data.get('security_question', '').strip()
@@ -367,71 +394,110 @@ def register():
             avatar_path = data.get('avatar_path', '/default.jpg')
         else:
             # 处理multipart/form-data
-            username = request.form.get('username', '').strip()
             password = request.form.get('password', '').strip()
             nickname = request.form.get('nickname', '').strip()
             security_question = request.form.get('security_question', '').strip()
             security_answer = request.form.get('security_answer', '').strip()
-            avatar_path = '/default.jpg'
             
-            # 处理头像上传
+            # 处理头像上传（在注册成功后，使用生成的account作为文件名）
             if 'avatar' in request.files:
                 avatar_file = request.files['avatar']
                 if avatar_file.filename:
+                    # 先保存为临时文件，注册成功后再重命名
                     import os
-                    from werkzeug.utils import secure_filename
-                    # 头像保存到 FrontEnd/public 文件夹，命名为用户名.jpg
-                    public_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'FrontEnd', 'public')
-                    os.makedirs(public_dir, exist_ok=True)
+                    import tempfile
                     # 获取文件扩展名
                     file_ext = os.path.splitext(avatar_file.filename)[1].lower()
                     if file_ext not in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
                         file_ext = '.jpg'  # 默认使用jpg
-                    # 使用用户名作为文件名（用户名已验证只能包含数字和英文字母）
-                    avatar_filename = f'{username}{file_ext}'
-                    avatar_path = os.path.join(public_dir, avatar_filename)
-                    avatar_file.save(avatar_path)
-                    # 转换为web路径格式
-                    avatar_path = f'/{avatar_filename}'
+                    # 创建临时文件
+                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_ext)
+                    avatar_file.save(temp_file.name)
+                    avatar_path = temp_file.name  # 临时保存路径，注册成功后会重命名
         
-        if not username or not password:
-            return jsonify({'success': False, 'message': '用户名和密码不能为空'}), 400
+        if not password:
+            return jsonify({'success': False, 'message': '密码不能为空'}), 400
         
+        # 调用注册接口（account会自动生成）
         result = auth_system.register(
-            username=username,
             password=password,
             nickname=nickname if nickname else None,
-            avatar_path=avatar_path,
+            avatar_path=None,  # 先不传头像路径，注册成功后再处理
             security_question=security_question if security_question else None,
             security_answer=security_answer if security_answer else None
         )
         
-        # 如果注册成功且上传了头像，更新数据库中的头像路径
-        # 记录注册日志
+        # 如果注册成功，处理头像上传和日志记录
         if result.get('success') and result.get('user_info'):
             user_id = result['user_info'].get('id')
-            username = result['user_info'].get('username')
-            if user_id and username:
-                UserLogging.log_register(user_id, username)
-        
-        if result.get('success') and avatar_path.startswith('/') and avatar_path != '/default.jpg':
-            try:
-                from db_connection import get_user_db_connection
-                conn = get_user_db_connection()
-                if conn:
-                    try:
-                        user_id = result['user_info']['id']
-                        with conn.cursor() as cursor:
-                            cursor.execute(
-                                "UPDATE users SET avatar_path = %s WHERE id = %s",
-                                (avatar_path, user_id)
-                            )
-                            conn.commit()
-                            result['user_info']['avatar_path'] = avatar_path
-                    finally:
-                        conn.close()
-            except Exception as e:
-                print(f"[API] 更新头像路径失败: {e}")
+            account = result['user_info'].get('account')
+            
+            # 记录注册日志
+            if user_id and account:
+                UserLogging.log_register(user_id, account)
+            
+            # 处理头像上传（如果有）
+            if not request.is_json and 'avatar' in request.files and avatar_path and avatar_path != '/default.jpg':
+                try:
+                    import os
+                    import shutil
+                    if os.path.exists(avatar_path):
+                        public_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'FrontEnd', 'public')
+                        os.makedirs(public_dir, exist_ok=True)
+                        
+                        # 获取文件扩展名
+                        file_ext = os.path.splitext(avatar_path)[1].lower()
+                        if file_ext not in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
+                            file_ext = '.jpg'
+                        
+                        # 使用account作为文件名
+                        avatar_filename = f'{account}{file_ext}'
+                        final_avatar_path = os.path.join(public_dir, avatar_filename)
+                        
+                        # 移动临时文件到最终位置
+                        shutil.move(avatar_path, final_avatar_path)
+                        
+                        # 转换为web路径格式
+                        avatar_path = f'/{avatar_filename}'
+                        
+                        # 更新数据库
+                        from db_connection import get_user_db_connection
+                        conn = get_user_db_connection()
+                        if conn:
+                            try:
+                                with conn.cursor() as cursor:
+                                    cursor.execute(
+                                        "UPDATE users SET avatar_path = %s WHERE id = %s",
+                                        (avatar_path, user_id)
+                                    )
+                                    conn.commit()
+                                    result['user_info']['avatar_path'] = avatar_path
+                            finally:
+                                conn.close()
+                    else:
+                        avatar_path = '/default.jpg'
+                except Exception as e:
+                    print(f"[API] 处理头像失败: {e}")
+                    # 如果头像处理失败，使用默认头像
+                    avatar_path = '/default.jpg'
+            elif request.is_json and avatar_path and avatar_path != '/default.jpg':
+                # JSON请求中直接使用提供的头像路径
+                try:
+                    from db_connection import get_user_db_connection
+                    conn = get_user_db_connection()
+                    if conn:
+                        try:
+                            with conn.cursor() as cursor:
+                                cursor.execute(
+                                    "UPDATE users SET avatar_path = %s WHERE id = %s",
+                                    (avatar_path, user_id)
+                                )
+                                conn.commit()
+                                result['user_info']['avatar_path'] = avatar_path
+                        finally:
+                            conn.close()
+                except Exception as e:
+                    print(f"[API] 更新头像路径失败: {e}")
         
         return jsonify(result)
     except Exception as e:
@@ -445,24 +511,52 @@ def login():
     """用户登录接口"""
     try:
         data = request.json
-        username = data.get('username', '').strip()
+        account = data.get('account', '').strip()
         password = data.get('password', '').strip()
         
-        if not username or not password:
-            return jsonify({'success': False, 'message': '用户名和密码不能为空'}), 400
+        if not account or not password:
+            return jsonify({'success': False, 'message': '账号和密码不能为空'}), 400
         
-        result = auth_system.login(username, password)
+        result = auth_system.login(account, password)
         
         # 记录登录日志
         if result.get('success') and result.get('user_info'):
             user_id = result['user_info'].get('id')
             if user_id:
-                UserLogging.log_login(user_id, username)
+                UserLogging.log_login(user_id, account)
         
         return jsonify(result)
     except Exception as e:
         print(f"[API] 登录失败: {e}")
         return jsonify({'success': False, 'message': f'登录失败：{str(e)}'}), 500
+
+@app.route('/api/auth/update-nickname', methods=['POST'])
+def update_nickname():
+    """修改用户昵称"""
+    try:
+        user_id = request.headers.get('X-User-Id') or request.json.get('user_id')
+        if not user_id:
+            return jsonify({'success': False, 'message': '缺少用户信息'}), 400
+        
+        user_id = int(user_id)
+        data = request.json
+        nickname = data.get('nickname', '').strip()
+        
+        if not nickname:
+            return jsonify({'success': False, 'message': '昵称不能为空'}), 400
+        
+        result = auth_system.update_nickname(user_id, nickname)
+        
+        # 如果修改成功，返回更新后的用户信息
+        if result.get('success'):
+            user_info = auth_system.get_user_by_id(user_id)
+            if user_info:
+                result['user_info'] = user_info
+        
+        return jsonify(result)
+    except Exception as e:
+        print(f"[API] 修改昵称失败: {e}")
+        return jsonify({'success': False, 'message': f'修改昵称失败：{str(e)}'}), 500
 
 @app.route('/api/auth/user', methods=['GET'])
 def get_user():
@@ -477,7 +571,7 @@ def get_user():
             # 不返回敏感信息（密码哈希、安全问题答案哈希）
             safe_user_info = {
                 'id': user_info.get('id'),
-                'username': user_info.get('username'),
+                'account': user_info.get('account'),
                 'nickname': user_info.get('nickname'),
                 'avatar_path': user_info.get('avatar_path'),
                 'role': user_info.get('role'),
@@ -613,12 +707,12 @@ def get_security_question_for_reset():
     """获取用户的安全问题（用于重置密码）"""
     try:
         data = request.json
-        username = data.get('username', '').strip()
+        account = data.get('account', '').strip()
         
-        if not username:
-            return jsonify({'success': False, 'message': '请输入用户名'}), 400
+        if not account:
+            return jsonify({'success': False, 'message': '请输入账号'}), 400
         
-        result = auth_system.get_security_question(username)
+        result = auth_system.get_security_question(account)
         return jsonify(result)
     except Exception as e:
         print(f"[API] 获取安全问题失败: {e}")
@@ -629,16 +723,16 @@ def verify_security_answer_for_reset():
     """验证安全问题答案（用于重置密码）"""
     try:
         data = request.json
-        username = data.get('username', '').strip()
+        account = data.get('account', '').strip()
         answer = data.get('answer', '').strip()
         
-        if not username:
-            return jsonify({'success': False, 'message': '请输入用户名'}), 400
+        if not account:
+            return jsonify({'success': False, 'message': '请输入账号'}), 400
         
         if not answer:
             return jsonify({'success': False, 'message': '请输入安全问题答案'}), 400
         
-        result = auth_system.verify_security_answer(username, answer)
+        result = auth_system.verify_security_answer(account, answer)
         return jsonify(result)
     except Exception as e:
         print(f"[API] 验证答案失败: {e}")
@@ -649,12 +743,12 @@ def reset_password_via_security():
     """通过安全问题重置密码"""
     try:
         data = request.json
-        username = data.get('username', '').strip()
+        account = data.get('account', '').strip()
         answer = data.get('answer', '').strip()
         new_password = data.get('new_password', '').strip()
         
-        if not username:
-            return jsonify({'success': False, 'message': '请输入用户名'}), 400
+        if not account:
+            return jsonify({'success': False, 'message': '请输入账号'}), 400
         
         if not answer:
             return jsonify({'success': False, 'message': '请输入安全问题答案'}), 400
@@ -666,12 +760,12 @@ def reset_password_via_security():
             return jsonify({'success': False, 'message': '密码至少需要6个字符'}), 400
         
         # 先验证答案
-        verify_result = auth_system.verify_security_answer(username, answer)
+        verify_result = auth_system.verify_security_answer(account, answer)
         if not verify_result.get('success'):
             return jsonify(verify_result), 400
         
         # 验证通过后重置密码
-        result = auth_system.reset_password(username, new_password)
+        result = auth_system.reset_password(account, new_password)
         return jsonify(result)
     except Exception as e:
         print(f"[API] 重置密码失败: {e}")
@@ -690,7 +784,7 @@ def change_avatar():
         if not user_info:
             return jsonify({'success': False, 'message': '用户不存在'}), 404
         
-        username = user_info.get('username')
+        account = user_info.get('account')
         old_avatar_path = user_info.get('avatar_path', '/default.jpg')
         
         # 判断是上传新头像还是使用默认头像
@@ -749,8 +843,8 @@ def change_avatar():
             if file_ext not in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
                 file_ext = '.jpg'  # 默认使用jpg
             
-            # 先保存为 用户名1.扩展名
-            temp_filename = f'{username}1{file_ext}'
+            # 先保存为 账号1.扩展名
+            temp_filename = f'{account}1{file_ext}'
             temp_path = os.path.join(public_dir, temp_filename)
             avatar_file.save(temp_path)
             
@@ -775,8 +869,8 @@ def change_avatar():
                     img = img.convert('RGB')
                 # 压缩到200x200（正方形）
                 img = img.resize((200, 200), Image.Resampling.LANCZOS)
-                # 重命名为 用户名.jpg（统一使用jpg格式）
-                final_filename = f'{username}.jpg'
+                # 重命名为 账号.jpg（统一使用jpg格式）
+                final_filename = f'{account}.jpg'
                 final_path = os.path.join(public_dir, final_filename)
                 # 保存压缩后的图片
                 img.save(final_path, 'JPEG', quality=90)
@@ -786,7 +880,7 @@ def change_avatar():
             except Exception as e:
                 print(f"[API] 处理头像失败: {e}")
                 # 如果PIL处理失败，使用原文件
-                final_filename = f'{username}{file_ext}'
+                final_filename = f'{account}{file_ext}'
                 final_path = os.path.join(public_dir, final_filename)
                 if os.path.exists(final_path):
                     os.remove(final_path)
@@ -819,6 +913,33 @@ def change_avatar():
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'更换头像失败：{str(e)}'}), 500
+
+def log_user_access(user_id, access_type, access_path=None, resource_id=None, resource_type=None):
+    """记录用户访问日志（包括管理员）"""
+    try:
+        from db_connection import get_user_db_connection
+        conn = get_user_db_connection()
+        if not conn:
+            return
+        
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO user_access_logs 
+                    (user_id, access_type, access_path, resource_id, resource_type)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (user_id, access_type, access_path, resource_id, resource_type))
+                conn.commit()
+        except Exception as e:
+            print(f"[日志] 记录访问日志失败: {e}")
+            if conn:
+                conn.rollback()
+        finally:
+            if conn:
+                conn.close()
+    except Exception as e:
+        print(f"[日志] 记录访问日志异常: {e}")
+
 
 @app.route('/api/aigc/chat', methods=['POST'])
 def aigc_chat():
@@ -1647,6 +1768,58 @@ def get_home_resources():
                 
                 # 构建资源列表
                 for img in paginated_images:
+                    # 从tags提取节日名称（先提取，用于后续查询）
+                    festival_name = None
+                    entity_name = ""
+                    description = ""
+                    
+                    if img.get('tags'):
+                        try:
+                            tags_data = json.loads(img['tags']) if isinstance(img['tags'], str) else img['tags']
+                            if isinstance(tags_data, list) and tags_data:
+                                for tag in tags_data:
+                                    if isinstance(tag, str):
+                                        match = re.search(r'([\u4e00-\u9fa5]+)', tag)
+                                        if match:
+                                            festival_name = match.group(1)
+                                            entity_name = festival_name
+                                            break
+                        except Exception as e:
+                            print(f"解析tags失败: {e}")
+                            pass
+                    
+                    # 优先从cultural_entities表获取资源信息和描述
+                    if festival_name:
+                        cursor.execute("""
+                            SELECT entity_name, description, entity_type, cultural_value
+                            FROM cultural_entities
+                            WHERE entity_name LIKE %s
+                            LIMIT 1
+                        """, (f'%{festival_name}%',))
+                        entity_info = cursor.fetchone()
+                        if entity_info:
+                            entity_name = entity_info.get('entity_name', festival_name)
+                            description = entity_info.get('description', '') or ''
+                            if description:
+                                description = description[:200]  # 首页显示较短描述
+                    
+                    # 如果还没有描述，从tags提取
+                    if not description and img.get('tags'):
+                        try:
+                            tags_data = json.loads(img['tags']) if isinstance(img['tags'], str) else img['tags']
+                            if isinstance(tags_data, list) and tags_data:
+                                for tag in tags_data:
+                                    if isinstance(tag, str) and festival_name and festival_name in tag:
+                                        desc_match = re.search(r'([\u4e00-\u9fa5]+[^\u4e00-\u9fa5]*)', tag)
+                                        if desc_match:
+                                            description = desc_match.group(1).strip()[:200]
+                                        else:
+                                            description = tag[:200] if len(tag) > 200 else tag
+                                        break
+                        except Exception as e:
+                            print(f"解析tags失败: {e}")
+                            pass
+                    
                     # 构建图片URL
                     storage_path = img.get('storage_path')
                     file_name = img.get('file_name')
@@ -1658,31 +1831,12 @@ def get_home_resources():
                     else:
                         actual_file = None
                     
-                    image_url = f"/api/images/crawled/{actual_file}" if actual_file else None
-                    
-                    # 从tags提取节日名称和描述
-                    entity_name = ""
-                    description = ""
-                    festival_name = None
-                    if img.get('tags'):
-                        try:
-                            tags_data = json.loads(img['tags']) if isinstance(img['tags'], str) else img['tags']
-                            if isinstance(tags_data, list) and tags_data:
-                                for tag in tags_data:
-                                    if isinstance(tag, str):
-                                        match = re.search(r'([\u4e00-\u9fa5]+)', tag)
-                                        if match:
-                                            festival_name = match.group(1)
-                                            entity_name = festival_name
-                                            desc_match = re.search(r'([\u4e00-\u9fa5]+[^\u4e00-\u9fa5]*)', tag)
-                                            if desc_match:
-                                                description = desc_match.group(1).strip()[:100]
-                                            else:
-                                                description = tag[:100] if len(tag) > 100 else tag
-                                            break
-                        except Exception as e:
-                            print(f"解析tags失败: {e}")
-                            pass
+                    # 确保所有资源都有图片URL（即使文件不存在，也使用API路径，由serve_crawled_image处理）
+                    if actual_file:
+                        image_url = f"/api/images/crawled/{actual_file}"
+                    else:
+                        # 如果没有文件名，使用default图片
+                        image_url = "/default.jpg"
                     
                     if not entity_name and img.get('file_name'):
                         entity_name = os.path.splitext(img['file_name'])[0]
@@ -1723,6 +1877,10 @@ def get_home_resources():
                             except:
                                 pass
                         
+                        # 如果没有图片，使用default图片
+                        if not image_url:
+                            image_url = "/default.jpg"
+                        
                         resources.append({
                             'id': f"entity_{entity['id']}",
                             'type': 'entity',
@@ -1730,6 +1888,7 @@ def get_home_resources():
                             'entity_name': entity.get('entity_name') or '未命名实体',
                             'description': (entity.get('description') or '')[:200] or '暂无简介',
                             'entity_type': entity.get('entity_type'),
+                            'festival_name': entity.get('entity_name'),  # 添加节日名称字段
                             'source': 'cultural_entities'
                         })
                 
@@ -1820,16 +1979,57 @@ def get_resource_detail():
                 
                 images = cursor.fetchall()
                 
+                # 即使没有图片，也尝试从cultural_entities表获取资源信息
                 if not images:
-                    return jsonify({
-                        'success': False,
-                        'message': f'未找到节日"{festival_name}"的图片资源'
-                    }), 404
+                    # 尝试从cultural_entities表获取资源信息
+                    cursor.execute("""
+                        SELECT entity_name, description, entity_type, cultural_value
+                        FROM cultural_entities
+                        WHERE entity_name LIKE %s
+                        LIMIT 1
+                    """, (f'%{festival_name}%',))
+                    entity_info = cursor.fetchone()
+                    if entity_info:
+                        # 如果没有图片，使用default图片
+                        default_image = {
+                            'id': 0,
+                            'file_name': 'default.jpg',
+                            'image_url': '/default.jpg',
+                            'dimensions': None,
+                            'crawl_time': None
+                        }
+                        return jsonify({
+                            'success': True,
+                            'festival_name': festival_name,
+                            'entity_name': entity_info.get('entity_name', festival_name),
+                            'description': entity_info.get('description', '') or '暂无简介',
+                            'images': [default_image],
+                            'total_images': 1
+                        })
+                    else:
+                        return jsonify({
+                            'success': False,
+                            'message': f'未找到节日"{festival_name}"的资源'
+                        }), 404
+                
+                # 先尝试从cultural_entities表获取资源信息和描述（优先获取）
+                entity_name = festival_name
+                description = ""
+                cursor.execute("""
+                    SELECT entity_name, description, entity_type, cultural_value
+                    FROM cultural_entities
+                    WHERE entity_name LIKE %s
+                    LIMIT 1
+                """, (f'%{festival_name}%',))
+                entity_info = cursor.fetchone()
+                if entity_info:
+                    entity_name = entity_info.get('entity_name', festival_name)
+                    description = entity_info.get('description', '') or ''
+                    if description:
+                        description = description[:500]  # 限制长度但保留更多内容
                 
                 # 构建图片列表
                 image_list = []
-                entity_name = festival_name
-                description = ""
                 
                 for img in images:
                     # 构建图片URL
@@ -1837,24 +2037,34 @@ def get_resource_detail():
                     file_name = img.get('file_name')
                     
                     if storage_path:
+                        # 如果storage_path包含路径，提取文件名
                         actual_file = os.path.basename(storage_path) if os.path.sep in storage_path else storage_path
                     elif file_name:
                         actual_file = file_name
                     else:
                         actual_file = None
                     
-                    image_url = f"/api/images/crawled/{actual_file}" if actual_file else None
+                    # 构建图片URL（直接使用API路径，不检查文件是否存在，让API路由处理）
+                    if actual_file:
+                        # 直接使用API路径，由serve_crawled_image函数处理文件不存在的情况
+                        image_url = f"/api/images/crawled/{actual_file}"
+                    else:
+                        # 如果没有文件名，使用default图片
+                        image_url = "/default.jpg"
                     
-                    # 从tags提取描述（只提取一次）
+                    # 如果还没有描述，尝试从tags提取（只提取一次）
                     if not description and img.get('tags'):
                         try:
                             tags_data = json.loads(img['tags']) if isinstance(img['tags'], str) else img['tags']
                             if isinstance(tags_data, list) and tags_data:
                                 for tag in tags_data:
                                     if isinstance(tag, str) and festival_name in tag:
+                                        # 提取更完整的描述
                                         desc_match = re.search(r'([\u4e00-\u9fa5]+[^\u4e00-\u9fa5]*)', tag)
                                         if desc_match:
-                                            description = desc_match.group(1).strip()[:200]
+                                            description = desc_match.group(1).strip()[:500]
+                                        else:
+                                            description = tag[:500]
                                         break
                         except Exception as e:
                             print(f"解析tags失败: {e}")
@@ -1868,19 +2078,8 @@ def get_resource_detail():
                         'crawl_time': str(img.get('crawl_time', '')) if img.get('crawl_time') else None
                     })
                 
-                # 尝试从cultural_entities表获取更详细的描述
-                if not description:
-                    cursor.execute("""
-                        SELECT description, entity_type, cultural_value
-                        FROM cultural_entities
-                        WHERE entity_name LIKE %s
-                        LIMIT 1
-                    """, (f'%{festival_name}%',))
-                    entity_info = cursor.fetchone()
-                    if entity_info:
-                        description = entity_info.get('description', '')[:200] or description
-                
                 print(f"[API] 成功获取资源详情: {festival_name}, 共 {len(image_list)} 张图片")
+                print(f"[API] 资源描述长度: {len(description) if description else 0} 字符")
                 return jsonify({
                     'success': True,
                     'festival_name': festival_name,
@@ -2204,10 +2403,18 @@ def serve_crawled_image(filename):
             actual_filename = os.path.basename(filename)
             safe_path = os.path.join(image_dir, actual_filename)
         
-        if os.path.exists(safe_path):
-            return send_from_directory(image_dir, os.path.basename(safe_path))
-        else:
-            return jsonify({'error': 'File not found'}), 404
+        # 如果文件仍然不存在，返回default图片
+        if not os.path.exists(safe_path):
+            print(f"[API] 图片文件不存在: {safe_path}，返回default图片")
+            default_image_path = os.path.join(base_dir, "public", "default.jpg")
+            if os.path.exists(default_image_path):
+                return send_from_directory(os.path.join(base_dir, "public"), "default.jpg")
+            else:
+                # 如果default.jpg也不存在，返回404
+                return jsonify({'error': 'Image not found'}), 404
+        
+        # 文件存在，返回图片
+        return send_from_directory(image_dir, os.path.basename(safe_path))
     except Exception as e:
         print(f"[API] 提供图片失败: {e}")
         import traceback
@@ -3176,7 +3383,7 @@ def approve_annotation(task_id):
             return jsonify({'success': False, 'message': '用户不存在'}), 401
         
         # 检查用户权限（只有管理员可以审核）
-        user_info = auth_system.get_user_info(user_id)
+        user_info = auth_system.get_user_by_id(user_id)
         if not user_info or user_info.get('role') != '管理员':
             return jsonify({'success': False, 'message': '无权限审核'}), 403
         
@@ -3235,7 +3442,7 @@ def reject_annotation(task_id):
             return jsonify({'success': False, 'message': '用户不存在'}), 401
         
         # 检查用户权限
-        user_info = auth_system.get_user_info(user_id)
+        user_info = auth_system.get_user_by_id(user_id)
         if not user_info or user_info.get('role') != '管理员':
             return jsonify({'success': False, 'message': '无权限审核'}), 403
         
@@ -3271,6 +3478,681 @@ def reject_annotation(task_id):
     except Exception as e:
         print(f"[API] 驳回标注失败: {e}")
         return jsonify({'success': False, 'message': f'驳回失败: {str(e)}'}), 500
+
+
+# ==================== 评论相关API ====================
+
+@app.route('/api/comments', methods=['GET'])
+def get_comments():
+    """获取资源的评论列表"""
+    resource_id = request.args.get('resource_id', type=int)
+    if not resource_id:
+        return jsonify({'success': False, 'message': '缺少resource_id参数'}), 400
+    
+    try:
+        from db_connection import get_user_db_connection
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor() as cursor:
+                # 获取评论列表，包括用户信息和点赞数
+                cursor.execute("""
+                    SELECT 
+                        c.id,
+                        c.resource_id,
+                        c.user_id,
+                        c.comment_content,
+                        c.created_at,
+                        u.account,
+                        u.nickname,
+                        u.avatar_path,
+                        (SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id) as like_count
+                    FROM user_comments c
+                    LEFT JOIN users u ON c.user_id = u.id
+                    WHERE c.resource_id = %s AND c.comment_status = 'approved'
+                    ORDER BY c.created_at DESC
+                """, (resource_id,))
+                
+                comments = cursor.fetchall()
+                
+                # 获取每条评论的回复
+                for comment in comments:
+                    cursor.execute("""
+                        SELECT 
+                            r.id,
+                            r.comment_id,
+                            r.reply_user_id,
+                            r.reply_content,
+                            r.created_at,
+                            u.account,
+                            u.nickname,
+                            u.avatar_path
+                        FROM comment_replies r
+                        LEFT JOIN users u ON r.reply_user_id = u.id
+                        WHERE r.comment_id = %s
+                        ORDER BY r.created_at ASC
+                    """, (comment['id'],))
+                    comment['replies'] = cursor.fetchall()
+                
+                return jsonify({
+                    'success': True,
+                    'comments': comments
+                })
+        finally:
+            if conn:
+                conn.close()
+    except Exception as e:
+        print(f"[API] 获取评论失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'获取评论失败：{str(e)}'}), 500
+
+
+@app.route('/api/comments', methods=['POST'])
+def create_comment():
+    """创建评论"""
+    try:
+        data = request.json
+        resource_id = data.get('resource_id')
+        user_id = data.get('user_id')
+        comment_content = data.get('comment_content', '').strip()
+        
+        if not resource_id or not user_id or not comment_content:
+            return jsonify({'success': False, 'message': '缺少必要参数'}), 400
+        
+        from db_connection import get_user_db_connection
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO user_comments (resource_id, user_id, comment_content, comment_status)
+                    VALUES (%s, %s, %s, 'approved')
+                """, (resource_id, user_id, comment_content))
+                conn.commit()
+                
+                comment_id = cursor.lastrowid
+                
+                # 获取创建的评论信息
+                cursor.execute("""
+                    SELECT 
+                        c.id,
+                        c.resource_id,
+                        c.user_id,
+                        c.comment_content,
+                        c.created_at,
+                        u.account,
+                        u.nickname,
+                        u.avatar_path,
+                        0 as like_count
+                    FROM user_comments c
+                    LEFT JOIN users u ON c.user_id = u.id
+                    WHERE c.id = %s
+                """, (comment_id,))
+                comment = cursor.fetchone()
+                comment['replies'] = []
+                
+                return jsonify({
+                    'success': True,
+                    'comment': comment,
+                    'message': '评论发布成功'
+                })
+        finally:
+            if conn:
+                conn.close()
+    except Exception as e:
+        print(f"[API] 创建评论失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'创建评论失败：{str(e)}'}), 500
+
+
+@app.route('/api/comments/<int:comment_id>/like', methods=['POST'])
+def like_comment(comment_id):
+    """点赞评论"""
+    try:
+        data = request.json
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            return jsonify({'success': False, 'message': '缺少user_id参数'}), 400
+        
+        from db_connection import get_user_db_connection
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor() as cursor:
+                # 检查是否已经点赞（需要先检查comment_likes表是否存在）
+                try:
+                    cursor.execute("""
+                        SELECT id FROM comment_likes 
+                        WHERE comment_id = %s AND user_id = %s
+                    """, (comment_id, user_id))
+                    
+                    existing_like = cursor.fetchone()
+                    if existing_like:
+                        # 已点赞，取消点赞
+                        cursor.execute("""
+                            DELETE FROM comment_likes 
+                            WHERE comment_id = %s AND user_id = %s
+                        """, (comment_id, user_id))
+                        action = 'unliked'
+                    else:
+                        # 未点赞，添加点赞
+                        cursor.execute("""
+                            INSERT INTO comment_likes (comment_id, user_id)
+                            VALUES (%s, %s)
+                        """, (comment_id, user_id))
+                        action = 'liked'
+                        
+                        # 发送通知给评论作者
+                        cursor.execute("""
+                            SELECT user_id FROM user_comments WHERE id = %s
+                        """, (comment_id,))
+                        comment_author = cursor.fetchone()
+                        if comment_author and comment_author['user_id'] != user_id:
+                            # 创建通知（需要先检查是否有notifications表）
+                            try:
+                                cursor.execute("""
+                                    INSERT INTO notifications (user_id, notification_type, content, related_id)
+                                    VALUES (%s, 'like', %s, %s)
+                                """, (comment_author['user_id'], f'用户点赞了您的评论', comment_id))
+                            except:
+                                pass  # 如果notifications表不存在，忽略
+                except Exception as table_error:
+                    # comment_likes表可能不存在，返回错误提示
+                    return jsonify({
+                        'success': False,
+                        'message': '点赞功能需要comment_likes表，请先创建该表'
+                    }), 500
+                
+                conn.commit()
+                
+                # 获取当前点赞数
+                try:
+                    cursor.execute("""
+                        SELECT COUNT(*) as like_count 
+                        FROM comment_likes 
+                        WHERE comment_id = %s
+                    """, (comment_id,))
+                    result = cursor.fetchone()
+                    like_count = result['like_count'] if result else 0
+                except:
+                    like_count = 0
+                
+                return jsonify({
+                    'success': True,
+                    'action': action,
+                    'like_count': like_count
+                })
+        finally:
+            if conn:
+                conn.close()
+    except Exception as e:
+        print(f"[API] 点赞失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'点赞失败：{str(e)}'}), 500
+
+
+@app.route('/api/comments/<int:comment_id>/reply', methods=['POST'])
+def reply_comment(comment_id):
+    """回复评论"""
+    try:
+        data = request.json
+        reply_user_id = data.get('user_id')
+        reply_content = data.get('reply_content', '').strip()
+        
+        if not reply_user_id or not reply_content:
+            return jsonify({'success': False, 'message': '缺少必要参数'}), 400
+        
+        from db_connection import get_user_db_connection
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO comment_replies (comment_id, reply_user_id, reply_content)
+                    VALUES (%s, %s, %s)
+                """, (comment_id, reply_user_id, reply_content))
+                conn.commit()
+                
+                reply_id = cursor.lastrowid
+                
+                # 获取创建的回复信息
+                cursor.execute("""
+                    SELECT 
+                        r.id,
+                        r.comment_id,
+                        r.reply_user_id,
+                        r.reply_content,
+                        r.created_at,
+                        u.account,
+                        u.nickname,
+                        u.avatar_path
+                    FROM comment_replies r
+                    LEFT JOIN users u ON r.reply_user_id = u.id
+                    WHERE r.id = %s
+                """, (reply_id,))
+                reply = cursor.fetchone()
+                
+                # 发送通知给评论作者
+                cursor.execute("""
+                    SELECT user_id FROM user_comments WHERE id = %s
+                """, (comment_id,))
+                comment_author = cursor.fetchone()
+                if comment_author and comment_author['user_id'] != reply_user_id:
+                    try:
+                        cursor.execute("""
+                            INSERT INTO notifications (user_id, notification_type, content, related_id)
+                            VALUES (%s, 'reply', %s, %s)
+                        """, (comment_author['user_id'], f'用户回复了您的评论', comment_id))
+                        conn.commit()
+                    except:
+                        pass  # 如果notifications表不存在，忽略
+                
+                return jsonify({
+                    'success': True,
+                    'reply': reply,
+                    'message': '回复成功'
+                })
+        finally:
+            if conn:
+                conn.close()
+    except Exception as e:
+        print(f"[API] 回复失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'回复失败：{str(e)}'}), 500
+
+
+@app.route('/api/notifications', methods=['GET'])
+def get_notifications():
+    """获取用户的通知列表"""
+    user_id = request.args.get('user_id', type=int)
+    is_read = request.args.get('is_read', type=int)
+    
+    if not user_id:
+        return jsonify({'success': False, 'message': '缺少user_id参数'}), 400
+    
+    try:
+        from db_connection import get_user_db_connection
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor() as cursor:
+                # 构建查询条件
+                query = "SELECT * FROM notifications WHERE user_id = %s"
+                params = [user_id]
+                
+                if is_read is not None:
+                    query += " AND is_read = %s"
+                    params.append(is_read)
+                
+                query += " ORDER BY created_at DESC LIMIT 50"
+                
+                cursor.execute(query, params)
+                notifications = cursor.fetchall()
+                
+                return jsonify({
+                    'success': True,
+                    'notifications': notifications
+                })
+        finally:
+            if conn:
+                conn.close()
+    except Exception as e:
+        print(f"[API] 获取通知失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'获取通知失败：{str(e)}'}), 500
+
+
+@app.route('/api/admin/log-access', methods=['POST'])
+def log_access():
+    """记录用户访问日志（包括管理员）"""
+    try:
+        data = request.json
+        user_id = data.get('user_id')
+        access_type = data.get('access_type', 'page_view')
+        access_path = data.get('access_path')
+        resource_id = data.get('resource_id')
+        resource_type = data.get('resource_type')
+        
+        if not user_id:
+            return jsonify({'success': False, 'message': '缺少user_id参数'}), 400
+        
+        log_user_access(user_id, access_type, access_path, resource_id, resource_type)
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        print(f"[API] 记录访问日志失败: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/notifications/<int:notification_id>/read', methods=['POST'])
+def mark_notification_read(notification_id):
+    """标记通知为已读"""
+    try:
+        from db_connection import get_user_db_connection
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    UPDATE notifications 
+                    SET is_read = 1 
+                    WHERE id = %s
+                """, (notification_id,))
+                conn.commit()
+                
+                return jsonify({
+                    'success': True,
+                    'message': '通知已标记为已读'
+                })
+        finally:
+            if conn:
+                conn.close()
+    except Exception as e:
+        print(f"[API] 标记通知已读失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'标记通知已读失败：{str(e)}'}), 500
+
+
+@app.route('/api/admin/dashboard/statistics', methods=['GET'])
+def get_dashboard_statistics():
+    """获取数据大屏统计信息（仅管理员可访问）"""
+    try:
+        # 从请求参数或请求头获取用户ID
+        user_id = request.args.get('user_id') or request.headers.get('X-User-ID')
+        
+        if not user_id:
+            return jsonify({'success': False, 'message': '未授权访问，请先登录'}), 401
+        
+        user_id = int(user_id)
+        
+        # 检查是否为管理员
+        from db_connection import get_user_db_connection
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor() as cursor:
+                # 从数据库users表读取role字段，检查是否为管理员
+                cursor.execute("SELECT role FROM users WHERE id = %s", (user_id,))
+                user_info = cursor.fetchone()
+                if not user_info:
+                    return jsonify({'success': False, 'message': '用户不存在'}), 404
+                
+                # 检查role字段是否为'管理员'
+                if user_info.get('role') != '管理员':
+                    return jsonify({'success': False, 'message': '权限不足，仅管理员可访问'}), 403
+                
+                from datetime import datetime, timedelta
+                import pytz
+                
+                # 获取当前时间（中国时区）
+                tz = pytz.timezone('Asia/Shanghai')
+                now = datetime.now(tz)
+                today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                
+                # 1. 历史总访问人次（从user_access_logs表统计，包括管理员）
+                cursor.execute("""
+                    SELECT COUNT(DISTINCT user_id) as total_users
+                    FROM user_access_logs
+                    WHERE access_type = 'page_view'
+                """)
+                result = cursor.fetchone()
+                total_users = result.get('total_users', 0) if result else 0
+                
+                # 如果user_access_logs表为空，回退到qa_sessions表统计
+                if total_users == 0:
+                    cursor.execute("""
+                        SELECT COUNT(DISTINCT user_id) as total_users
+                        FROM qa_sessions
+                    """)
+                    result = cursor.fetchone()
+                    total_users = result.get('total_users', 0) if result else 0
+                
+                # 2. 今日访问人次（从user_access_logs表统计，包括管理员）
+                cursor.execute("""
+                    SELECT COUNT(DISTINCT user_id) as today_users
+                    FROM user_access_logs
+                    WHERE access_type = 'page_view' AND access_time >= %s
+                """, (today_start,))
+                result = cursor.fetchone()
+                today_users = result.get('today_users', 0) if result else 0
+                
+                # 如果user_access_logs表为空，回退到qa_sessions表统计
+                if today_users == 0:
+                    cursor.execute("""
+                        SELECT COUNT(DISTINCT user_id) as today_users
+                        FROM qa_sessions
+                        WHERE created_at >= %s
+                    """, (today_start,))
+                    result = cursor.fetchone()
+                    today_users = result.get('today_users', 0) if result else 0
+                
+                # 3. 历史文字AIGC使用人次（从user_access_logs表统计，包括管理员）
+                cursor.execute("""
+                    SELECT COUNT(DISTINCT user_id) as total_text_users
+                    FROM user_access_logs
+                    WHERE access_type = 'aigc_text'
+                """)
+                result = cursor.fetchone()
+                total_text_users = result.get('total_text_users', 0) if result else 0
+                
+                # 如果user_access_logs表为空，回退到qa_messages表统计
+                if total_text_users == 0:
+                    cursor.execute("""
+                        SELECT COUNT(DISTINCT user_id) as total_text_users
+                        FROM qa_messages
+                        WHERE model = 'text'
+                    """)
+                    result = cursor.fetchone()
+                    total_text_users = result.get('total_text_users', 0) if result else 0
+                
+                # 4. 今日文字AIGC使用人次（从user_access_logs表统计，包括管理员）
+                cursor.execute("""
+                    SELECT COUNT(DISTINCT user_id) as today_text_users
+                    FROM user_access_logs
+                    WHERE access_type = 'aigc_text' AND access_time >= %s
+                """, (today_start,))
+                result = cursor.fetchone()
+                today_text_users = result.get('today_text_users', 0) if result else 0
+                
+                # 如果user_access_logs表为空，回退到qa_messages表统计
+                if today_text_users == 0:
+                    cursor.execute("""
+                        SELECT COUNT(DISTINCT user_id) as today_text_users
+                        FROM qa_messages
+                        WHERE model = 'text' AND create_time >= %s
+                    """, (today_start,))
+                    result = cursor.fetchone()
+                    today_text_users = result.get('today_text_users', 0) if result else 0
+                
+                # 5. 历史图片AIGC使用人次（从user_access_logs表统计，包括管理员）
+                cursor.execute("""
+                    SELECT COUNT(DISTINCT user_id) as total_image_users
+                    FROM user_access_logs
+                    WHERE access_type = 'aigc_image'
+                """)
+                result = cursor.fetchone()
+                total_image_users = result.get('total_image_users', 0) if result else 0
+                
+                # 如果user_access_logs表为空，回退到qa_messages表统计
+                if total_image_users == 0:
+                    cursor.execute("""
+                        SELECT COUNT(DISTINCT user_id) as total_image_users
+                        FROM qa_messages
+                        WHERE model = 'image'
+                    """)
+                    result = cursor.fetchone()
+                    total_image_users = result.get('total_image_users', 0) if result else 0
+                
+                # 6. 今日图片AIGC使用人次（从user_access_logs表统计，包括管理员）
+                cursor.execute("""
+                    SELECT COUNT(DISTINCT user_id) as today_image_users
+                    FROM user_access_logs
+                    WHERE access_type = 'aigc_image' AND access_time >= %s
+                """, (today_start,))
+                result = cursor.fetchone()
+                today_image_users = result.get('today_image_users', 0) if result else 0
+                
+                # 如果user_access_logs表为空，回退到qa_messages表统计
+                if today_image_users == 0:
+                    cursor.execute("""
+                        SELECT COUNT(DISTINCT user_id) as today_image_users
+                        FROM qa_messages
+                        WHERE model = 'image' AND create_time >= %s
+                    """, (today_start,))
+                    result = cursor.fetchone()
+                    today_image_users = result.get('today_image_users', 0) if result else 0
+                
+                # 7. 历史文字AIGC使用次数（从user_access_logs表统计，包括管理员）
+                cursor.execute("""
+                    SELECT COUNT(*) as total_text_count
+                    FROM user_access_logs
+                    WHERE access_type = 'aigc_text'
+                """)
+                result = cursor.fetchone()
+                total_text_count = result.get('total_text_count', 0) if result else 0
+                
+                # 如果user_access_logs表为空，回退到qa_messages表统计
+                if total_text_count == 0:
+                    cursor.execute("""
+                        SELECT COUNT(*) as total_text_count
+                        FROM qa_messages
+                        WHERE model = 'text'
+                    """)
+                    result = cursor.fetchone()
+                    total_text_count = result.get('total_text_count', 0) if result else 0
+                
+                # 8. 今日文字AIGC使用次数（从user_access_logs表统计，包括管理员）
+                cursor.execute("""
+                    SELECT COUNT(*) as today_text_count
+                    FROM user_access_logs
+                    WHERE access_type = 'aigc_text' AND access_time >= %s
+                """, (today_start,))
+                result = cursor.fetchone()
+                today_text_count = result.get('today_text_count', 0) if result else 0
+                
+                # 如果user_access_logs表为空，回退到qa_messages表统计
+                if today_text_count == 0:
+                    cursor.execute("""
+                        SELECT COUNT(*) as today_text_count
+                        FROM qa_messages
+                        WHERE model = 'text' AND create_time >= %s
+                    """, (today_start,))
+                    result = cursor.fetchone()
+                    today_text_count = result.get('today_text_count', 0) if result else 0
+                
+                # 9. 历史图片AIGC使用次数（从user_access_logs表统计，包括管理员）
+                cursor.execute("""
+                    SELECT COUNT(*) as total_image_count
+                    FROM user_access_logs
+                    WHERE access_type = 'aigc_image'
+                """)
+                result = cursor.fetchone()
+                total_image_count = result.get('total_image_count', 0) if result else 0
+                
+                # 如果user_access_logs表为空，回退到qa_messages表统计
+                if total_image_count == 0:
+                    cursor.execute("""
+                        SELECT COUNT(*) as total_image_count
+                        FROM qa_messages
+                        WHERE model = 'image'
+                    """)
+                    result = cursor.fetchone()
+                    total_image_count = result.get('total_image_count', 0) if result else 0
+                
+                # 10. 今日图片AIGC使用次数（从user_access_logs表统计，包括管理员）
+                cursor.execute("""
+                    SELECT COUNT(*) as today_image_count
+                    FROM user_access_logs
+                    WHERE access_type = 'aigc_image' AND access_time >= %s
+                """, (today_start,))
+                result = cursor.fetchone()
+                today_image_count = result.get('today_image_count', 0) if result else 0
+                
+                # 如果user_access_logs表为空，回退到qa_messages表统计
+                if today_image_count == 0:
+                    cursor.execute("""
+                        SELECT COUNT(*) as today_image_count
+                        FROM qa_messages
+                        WHERE model = 'image' AND create_time >= %s
+                    """, (today_start,))
+                    result = cursor.fetchone()
+                    today_image_count = result.get('today_image_count', 0) if result else 0
+                
+                # 11. 最近7天的使用趋势（按天统计，优先使用user_access_logs表）
+                seven_days_ago = today_start - timedelta(days=6)
+                cursor.execute("""
+                    SELECT 
+                        DATE(access_time) as date,
+                        COUNT(DISTINCT user_id) as daily_users,
+                        SUM(CASE WHEN access_type = 'aigc_text' THEN 1 ELSE 0 END) as text_count,
+                        SUM(CASE WHEN access_type = 'aigc_image' THEN 1 ELSE 0 END) as image_count
+                    FROM user_access_logs
+                    WHERE access_time >= %s
+                    GROUP BY DATE(access_time)
+                    ORDER BY date ASC
+                """, (seven_days_ago,))
+                trend_data = cursor.fetchall()
+                
+                # 如果user_access_logs表为空，回退到qa_messages表统计
+                if not trend_data:
+                    cursor.execute("""
+                        SELECT 
+                            DATE(create_time) as date,
+                            COUNT(DISTINCT user_id) as daily_users,
+                            SUM(CASE WHEN model = 'text' THEN 1 ELSE 0 END) as text_count,
+                            SUM(CASE WHEN model = 'image' THEN 1 ELSE 0 END) as image_count
+                        FROM qa_messages
+                        WHERE create_time >= %s
+                        GROUP BY DATE(create_time)
+                        ORDER BY date ASC
+                    """, (seven_days_ago,))
+                    trend_data = cursor.fetchall()
+                
+                return jsonify({
+                    'success': True,
+                    'data': {
+                        'total_users': total_users,
+                        'today_users': today_users,
+                        'total_text_users': total_text_users,
+                        'today_text_users': today_text_users,
+                        'total_image_users': total_image_users,
+                        'today_image_users': today_image_users,
+                        'total_text_count': total_text_count,
+                        'today_text_count': today_text_count,
+                        'total_image_count': total_image_count,
+                        'today_image_count': today_image_count,
+                        'trend_data': trend_data
+                    }
+                })
+        finally:
+            if conn:
+                conn.close()
+    except Exception as e:
+        print(f"[API] 获取数据大屏统计失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'获取统计信息失败：{str(e)}'}), 500
 
 
 if __name__ == '__main__':
