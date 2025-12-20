@@ -155,9 +155,10 @@ FrontEnd/
 - 访问路径：`/default.jpg`
 
 ### 用户头像
-- 存储位置：`FrontEnd/public/` 目录
-- 命名格式：`{account}.jpg`（如：12345678.jpg，使用账号而非用户名）
-- 访问路径：`/{account}.jpg`
+- 存储位置：项目根目录的 `public/` 文件夹（与 `start_dev.bat` 同目录）
+- 命名格式：`{account}.jpg`（如：123456789.jpg，使用账号而非用户名）
+- 默认头像：`default.jpg`（默认管理员和测试用户都使用此头像）
+- 访问路径：`/{account}.jpg` 或 `/default.jpg`
 - 通过Flask静态文件服务提供
 
 ## 开发说明

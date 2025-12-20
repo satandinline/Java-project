@@ -10,7 +10,7 @@
     - 自动连接MySQL数据库
     - 执行 init_schema.sql 中的所有SQL语句
     - 创建所有表、视图、索引和角色
-    - 创建默认管理员账户（admin/123456）
+    - 创建默认管理员账户和测试用户账户（在Python代码中创建）
     
 注意：
     - 此脚本会创建全新的数据库结构
@@ -302,6 +302,69 @@ def execute_sql_file(conn, sql_file_path):
         return False
 
 
+def create_default_accounts(conn):
+    """
+    创建默认管理员和测试用户账号
+    密码123456的SHA256哈希值：8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92
+    """
+    import hashlib
+    
+    password_hash = hashlib.sha256('123456'.encode()).hexdigest()
+    
+    default_accounts = [
+        {
+            'account': '123456789',
+            'password_hash': password_hash,
+            'role': '管理员',
+            'nickname': '管理员',
+            'avatar_path': '/default.jpg'
+        },
+        {
+            'account': '987654321',
+            'password_hash': password_hash,
+            'role': '普通用户',
+            'nickname': '测试用户',
+            'avatar_path': '/default.jpg'
+        }
+    ]
+    
+    try:
+        with conn.cursor() as cursor:
+            for account_info in default_accounts:
+                # 检查账号是否已存在
+                cursor.execute(
+                    "SELECT id FROM users WHERE account = %s",
+                    (account_info['account'],)
+                )
+                existing = cursor.fetchone()
+                
+                if existing:
+                    # 如果账号已存在，跳过创建
+                    print(f"  账号 {account_info['account']} 已存在，跳过创建")
+                else:
+                    # 创建新账号
+                    cursor.execute("""
+                        INSERT INTO `users` (`account`, `password_hash`, `role`, `nickname`, `signature`, `avatar_path`) 
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    """, (
+                        account_info['account'],
+                        account_info['password_hash'],
+                        account_info['role'],
+                        account_info['nickname'],
+                        None,  # signature 默认为 NULL
+                        account_info['avatar_path']
+                    ))
+                    print(f"  [OK] 已创建账号: {account_info['account']} ({account_info['nickname']})")
+        
+        conn.commit()
+        print("[OK] 默认账号创建完成")
+    except Exception as e:
+        print(f"[ERROR] 创建默认账号失败: {e}")
+        import traceback
+        traceback.print_exc()
+        conn.rollback()
+
+
 def main():
     """主函数"""
     print("=" * 60)
@@ -345,13 +408,19 @@ def main():
         success = execute_sql_file(conn, SQL_FILE)
         
         if success:
+            # 创建默认账号
+            print("\n正在创建默认账号...")
+            create_default_accounts(conn)
+            
             print("\n" + "=" * 60)
             print("[OK] 数据库初始化成功完成！")
             print("=" * 60)
-            print("\n默认管理员账户:")
-            print("  用户名: admin")
-            print("  密码: 123456")
-            print("\n请及时修改默认管理员密码！")
+            print("\n默认账户:")
+            print("  管理员账号: 123456789")
+            print("  管理员密码: 123456")
+            print("  测试用户账号: 987654321")
+            print("  测试用户密码: 123456")
+            print("\n请及时修改默认密码！")
             return 0
         else:
             print("\n[WARNING] 数据库初始化完成，但存在一些错误")

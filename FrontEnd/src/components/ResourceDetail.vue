@@ -139,9 +139,19 @@ const loadResourceDetail = async () => {
   }
 };
 
-// 返回首页
+// 返回首页（恢复之前的页码）
 const goBack = () => {
-  router.push('/');
+  const lastPage = sessionStorage.getItem('lastResourcePage');
+  if (lastPage) {
+    router.push({
+      path: '/',
+      query: { page: lastPage }
+    });
+    // 清除保存的页码
+    sessionStorage.removeItem('lastResourcePage');
+  } else {
+    router.push('/');
+  }
 };
 
 // 打开图片预览

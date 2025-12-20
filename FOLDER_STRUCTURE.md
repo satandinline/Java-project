@@ -66,8 +66,8 @@
 - 命名格式：`avatar_{user_id}_{original_filename}`
 
 **实际情况**：
-- 当前头像实际存储在 `FrontEnd/public/` 文件夹
-- 命名格式：`{account}.jpg`（使用账号，如：12345678.jpg）
+- 当前头像实际存储在项目根目录的 `public/` 文件夹（与 `start_dev.bat` 同目录）
+- 命名格式：`{account}.jpg`（使用账号，如：123456789.jpg）
 - 前端配置了 `/avatars` 代理，但后端未实现对应路由
 
 **建议**：
@@ -90,31 +90,45 @@
 
 ---
 
-### 5. `FrontEnd/public/` - 前端静态资源和用户头像
+### 5. `public/` - 用户头像存储（项目根目录）
 
 **用途**：
-- 存储前端静态资源（如默认头像、favicon等）
-- **实际存储用户上传的头像文件**
+- **存储用户上传的头像文件**
+- 存储默认头像 `default.jpg`
+
+**存储位置**：
+- 项目根目录下的 `public/` 文件夹（与 `start_dev.bat` 同目录）
 
 **存储内容**：
-- `default.jpg`：默认头像（所有用户未上传头像时显示）
-- `{account}.jpg`：用户上传的头像（使用账号，如：12345678.jpg）
-- `favicon.ico`：网站图标
-- `videos/`：轮播视频文件
+- `default.jpg`：默认头像（所有用户未上传头像时显示，包括默认管理员和测试用户）
+- `{account}.jpg`：用户上传的头像（使用账号，如：123456789.jpg）
 
 **头像处理**：
 - 用户上传的头像会自动压缩到200x200像素
 - 统一保存为JPG格式
-- 命名格式：`{account}.jpg`（使用账号，如：12345678.jpg）
+- 命名格式：`{account}.jpg`（使用账号，如：123456789.jpg）
 - **注意**：头像文件名使用账号（account），而非昵称（nickname）
 
 **访问路径**：
 - 默认头像：`/default.jpg`
-- 用户头像：`/{account}.jpg`（使用账号，如：/12345678.jpg）
+- 用户头像：`/{account}.jpg`（使用账号，如：/123456789.jpg）
 - 通过Flask的静态文件服务提供
 
 **代码位置**：
-- `AIGC/aigc_api_server.py` 第328-339行：注册时保存头像
+- `AIGC/aigc_api_server.py` 第53行：定义public_dir路径
+- `AIGC/aigc_api_server.py` 第774-1009行：更换头像功能
+
+---
+
+### 6. `FrontEnd/public/` - 前端静态资源
+
+**用途**：
+- 存储前端静态资源（如favicon、视频等）
+- **不存储用户头像**
+
+**存储内容**：
+- `favicon.ico`：网站图标
+- `videos/`：轮播视频文件
 - `AIGC/aigc_api_server.py` 第680-726行：更换头像时保存
 - `AIGC/aigc_api_server.py` 第2290-2309行：提供静态文件服务
 
@@ -145,7 +159,8 @@
 |--------|------|------|----------|
 | `AIGC_graph/` | AIGC生成的图片 | ✅ 使用中 | 图片AIGC生成的图像 |
 | `crawled_images/` | 爬虫抓取的图片 | ✅ 使用中 | 爬虫抓取的文化资源图片 |
-| `FrontEnd/public/` | 前端静态资源 | ✅ 使用中 | 默认头像、用户头像、favicon等 |
+| `public/`（项目根目录） | 用户头像存储 | ✅ 使用中 | 默认头像（default.jpg）、用户上传的头像 |
+| `FrontEnd/public/` | 前端静态资源 | ✅ 使用中 | favicon、视频等前端资源 |
 | `uploads/` | 用户上传资源 | ✅ 使用中 | 用户上传的待审核文件（文件名格式：用户名-日期-时间） |
 
 ---

@@ -286,8 +286,64 @@ class MinzuFestivalsSpider:
     def _download_image(self, image_url, file_name):
         """下载图片并保存"""
         try:
-            response = self.session.get(image_url, timeout=10, stream=True)
-            response.raise_for_status()
+            # 增加超时时间和重试机制
+            max_retries = 3
+            base_retry_delay = 2
+            response = None
+            
+            for attempt in range(max_retries):
+                try:
+                    # 增加超时时间到40秒，并添加连接超时
+                    response = self.session.get(
+                        image_url, 
+                        timeout=(10, 40),  # (连接超时, 读取超时)
+                        stream=True,
+                        allow_redirects=True
+                    )
+                    response.raise_for_status()
+                    break
+                except requests.exceptions.Timeout:
+                    if attempt < max_retries - 1:
+                        retry_delay = base_retry_delay * (attempt + 1)  # 递增延迟：2秒、4秒、6秒
+                        print(f"  图片下载超时（尝试 {attempt + 1}/{max_retries}），{retry_delay}秒后重试...")
+                        time.sleep(retry_delay)
+                    else:
+                        print(f"  图片下载超时，已重试{max_retries}次，放弃下载")
+                        return None, None
+                except requests.exceptions.HTTPError as e:
+                    # 针对服务器错误（502, 503, 504等）使用更长的延迟
+                    status_code = e.response.status_code if e.response else None
+                    if status_code in [502, 503, 504, 429]:
+                        if attempt < max_retries - 1:
+                            # 服务器错误使用更长的延迟：5秒、10秒、15秒
+                            retry_delay = 5 * (attempt + 1)
+                            print(f"  服务器错误 {status_code}（尝试 {attempt + 1}/{max_retries}），{retry_delay}秒后重试...")
+                            time.sleep(retry_delay)
+                        else:
+                            print(f"  服务器错误 {status_code}，已重试{max_retries}次，放弃下载")
+                            return None, None
+                    else:
+                        # 其他HTTP错误（如404）直接放弃
+                        print(f"  HTTP错误 {status_code}，放弃下载")
+                        return None, None
+                except requests.exceptions.RequestException as e:
+                    if attempt < max_retries - 1:
+                        retry_delay = base_retry_delay * (attempt + 1)
+                        print(f"  图片下载失败（尝试 {attempt + 1}/{max_retries}）: {str(e)[:100]}，{retry_delay}秒后重试...")
+                        time.sleep(retry_delay)
+                    else:
+                        print(f"  图片下载失败，已重试{max_retries}次: {str(e)[:100]}")
+                        return None, None
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        retry_delay = base_retry_delay * (attempt + 1)
+                        print(f"  未知错误（尝试 {attempt + 1}/{max_retries}）: {str(e)[:100]}，{retry_delay}秒后重试...")
+                        time.sleep(retry_delay)
+                    else:
+                        raise
+            
+            if not response:
+                return None, None
             
             file_path = os.path.join(CRAWLED_IMAGES_DIR, file_name)
             
@@ -980,11 +1036,18 @@ class MinzuFestivalsSpider:
             use_grouped_naming = valid_images_count >= 2
             
             # 下载并保存图片
-            for img_info in images:
+            for idx, img_info in enumerate(images):
                 image_url = img_info['url']
                 # 如果有多张图片，所有图片都使用分组命名（包括第一张）
                 is_same_festival = use_grouped_naming and current_festival == self.current_festival_name
                 file_name = self._get_next_image_name(image_url, is_same_festival=is_same_festival)
+                
+                # 在下载图片之间添加延迟，避免对服务器造成过大压力
+                # 第一张图片不需要延迟，后续图片延迟1-2秒
+                if idx > 0:
+                    delay = 1.5  # 1.5秒延迟
+                    time.sleep(delay)
+                
                 file_path, dimensions = self._download_image(image_url, file_name)
                 
                 if file_path:

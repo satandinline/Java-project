@@ -13,7 +13,8 @@ python database_files/run_init_schema.py
 - 连接到MySQL数据库（使用root账户）
 - 执行 `init_schema.sql` 中的所有SQL语句
 - 创建所有表、视图、索引和角色
-- 创建默认管理员账户（账号：12345678，密码：123456）
+- 创建默认管理员账户（账号：123456789，密码：123456）
+- 创建默认测试用户账户（账号：987654321，密码：123456）
 
 **配置说明：**
 - 脚本会从环境变量或 `.env` 文件读取数据库配置
@@ -63,15 +64,24 @@ mysql -u root -p < database_files/init_schema.sql
 
 **新增字段（已整合到init_schema.sql）：**
 - `nickname` - 用户昵称（可选，未设置则随机生成）
-- `avatar_path` - 头像路径（默认：`./default.jpg`）
+- `signature` - 个人签名（可选，最多500字符）
+- `avatar_path` - 头像路径（默认：`/default.jpg`）
 - `security_question` - 自定义安全问题（用于找回密码）
 - `security_answer_hash` - 安全问题答案的哈希值（SHA-256）
 
-**默认管理员账户：**
-- 账号：`12345678`（8位数字，系统自动生成）
-- 密码：`123456`（SHA-256哈希值：`8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92`）
-- 角色：管理员
-- 昵称：管理员
+**默认账户：**
+- **管理员账户**：
+  - 账号：`123456789`（9位数字）
+  - 密码：`123456`（SHA-256哈希值：`8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92`）
+  - 角色：管理员
+  - 昵称：管理员
+  - 头像：`/default.jpg`（使用默认头像）
+- **测试用户账户**：
+  - 账号：`987654321`（9位数字）
+  - 密码：`123456`（SHA-256哈希值：`8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92`）
+  - 角色：普通用户
+  - 昵称：测试用户
+  - 头像：`/default.jpg`（使用默认头像）
 
 **注意**：
 - 账号字段已从`username`改为`account`

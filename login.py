@@ -110,10 +110,10 @@ class AuthSystem:
                 
                 # 插入新用户（默认角色为'普通用户'）
                 cursor.execute(
-                    """INSERT INTO users (account, password_hash, role, nickname, avatar_path, 
+                    """INSERT INTO users (account, password_hash, role, nickname, signature, avatar_path, 
                        security_question, security_answer_hash) 
-                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-                    (account, password_hash, "普通用户", nickname, avatar_path, 
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (account, password_hash, "普通用户", nickname, None, avatar_path, 
                      security_question, security_answer_hash)
                 )
                 conn.commit()
@@ -128,6 +128,7 @@ class AuthSystem:
                         "id": user_id,
                         "account": account,
                         "nickname": nickname,
+                        "signature": None,
                         "avatar_path": avatar_path,
                         "role": "普通用户"
                     }
@@ -157,7 +158,7 @@ class AuthSystem:
             with conn.cursor() as cursor:
                 # 查询用户（使用account字段）
                 cursor.execute(
-                    "SELECT id, account, password_hash, role, nickname, avatar_path FROM users WHERE account = %s",
+                    "SELECT id, account, password_hash, role, nickname, signature, avatar_path FROM users WHERE account = %s",
                     (account,)
                 )
                 user = cursor.fetchone()
@@ -170,7 +171,7 @@ class AuthSystem:
                 if user["password_hash"] != password_hash:
                     return {"success": False, "message": "密码错误，请重新尝试"}
                 
-                # 返回用户信息（包含昵称和头像）
+                # 返回用户信息（包含昵称、个人签名和头像）
                 avatar_path = user.get("avatar_path")
                 if not avatar_path or avatar_path == './default.jpg':
                     avatar_path = '/default.jpg'
@@ -179,6 +180,7 @@ class AuthSystem:
                     "account": user["account"],
                     "role": user["role"],
                     "nickname": user.get("nickname", user["account"]),
+                    "signature": user.get("signature"),
                     "avatar_path": avatar_path
                 }
                 return {
@@ -201,7 +203,7 @@ class AuthSystem:
         try:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT id, account, role, nickname, avatar_path, security_question FROM users WHERE id = %s",
+                    "SELECT id, account, role, nickname, signature, avatar_path, security_question FROM users WHERE id = %s",
                     (user_id,)
                 )
                 user = cursor.fetchone()
@@ -211,6 +213,7 @@ class AuthSystem:
                         "account": user["account"],
                         "role": user["role"],
                         "nickname": user.get("nickname", user["account"]),
+                        "signature": user.get("signature"),
                         "avatar_path": user.get("avatar_path", "./default.jpg"),
                         "security_question": user.get("security_question")
                     }

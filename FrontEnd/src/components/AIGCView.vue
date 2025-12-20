@@ -340,7 +340,7 @@ const getCurrentUser = () => {
 
 // 获取用户昵称和头像
 const currentUserInfo = computed(() => getCurrentUser());
-const currentUserNickname = computed(() => currentUserInfo.value?.nickname || currentUserInfo.value?.username || '用户');
+const currentUserNickname = computed(() => currentUserInfo.value?.nickname || currentUserInfo.value?.account || '用户');
 const currentUserAvatar = computed(() => currentUserInfo.value?.avatar_path || './default.jpg');
 
 // 获取头像URL

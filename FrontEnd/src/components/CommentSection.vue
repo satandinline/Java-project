@@ -32,11 +32,11 @@
         <div class="comment-header-info">
           <img 
             :src="comment.avatar_path || '/default.jpg'" 
-            :alt="comment.nickname || comment.username"
+            :alt="comment.nickname || comment.account || '用户'"
             class="comment-avatar"
           />
           <div class="comment-user-info">
-            <span class="comment-username">{{ comment.nickname || comment.username }}</span>
+            <span class="comment-username">{{ comment.nickname || comment.account || '用户' }}</span>
             <span class="comment-time">{{ formatTime(comment.created_at) }}</span>
           </div>
         </div>
@@ -91,12 +91,12 @@
           >
             <img 
               :src="reply.avatar_path || '/default.jpg'" 
-              :alt="reply.nickname || reply.username"
+              :alt="reply.nickname || reply.account || '用户'"
               class="reply-avatar"
             />
             <div class="reply-content-wrapper">
               <div class="reply-user-info">
-                <span class="reply-username">{{ reply.nickname || reply.username }}</span>
+                <span class="reply-username">{{ reply.nickname || reply.account || '用户' }}</span>
                 <span class="reply-time">{{ formatTime(reply.created_at) }}</span>
               </div>
               <div class="reply-content">{{ reply.reply_content }}</div>

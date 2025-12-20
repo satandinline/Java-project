@@ -281,16 +281,89 @@ class WikipediaSpider:
     def _download_image(self, image_url, file_name):
         """下载图片并保存"""
         try:
+            # 过滤掉维基百科的特殊URL（如CentralAutoLogin等）
+            if 'special:' in image_url.lower() or 'centralautologin' in image_url.lower():
+                print(f"  跳过维基百科特殊URL: {image_url[:80]}...")
+                return None, None
+            
             # 处理维基百科的图片URL（可能需要转换为直接访问URL）
             if 'upload.wikimedia.org' in image_url or image_url.startswith('//'):
                 if image_url.startswith('//'):
                     image_url = 'https:' + image_url
                 # 对于缩略图，尝试获取原图
                 if '/thumb/' in image_url:
-                    image_url = image_url.split('/thumb/')[0] + '/' + '/'.join(image_url.split('/thumb/')[1].split('/')[1:])
+                    # 提取原图URL：/thumb/文件名/尺寸-文件名 -> /文件名
+                    parts = image_url.split('/thumb/')
+                    if len(parts) == 2:
+                        thumb_path = parts[1]
+                        # 移除尺寸前缀（如 220px-）
+                        thumb_path = re.sub(r'^\d+px-', '', thumb_path)
+                        # 提取文件名（最后一个/之后的部分）
+                        filename = thumb_path.split('/')[-1]
+                        # 构建原图URL
+                        image_url = parts[0] + '/' + filename
+                    else:
+                        # 如果解析失败，使用原始逻辑
+                        image_url = image_url.split('/thumb/')[0] + '/' + '/'.join(image_url.split('/thumb/')[1].split('/')[1:])
             
-            response = self.session.get(image_url, timeout=10, stream=True)
-            response.raise_for_status()
+            # 增加超时时间和重试机制
+            max_retries = 3
+            base_retry_delay = 2
+            response = None
+            
+            for attempt in range(max_retries):
+                try:
+                    # 增加超时时间到40秒，并添加连接超时
+                    response = self.session.get(
+                        image_url, 
+                        timeout=(10, 40),  # (连接超时, 读取超时)
+                        stream=True,
+                        allow_redirects=True
+                    )
+                    response.raise_for_status()
+                    break
+                except requests.exceptions.Timeout:
+                    if attempt < max_retries - 1:
+                        retry_delay = base_retry_delay * (attempt + 1)  # 递增延迟：2秒、4秒、6秒
+                        print(f"  图片下载超时（尝试 {attempt + 1}/{max_retries}），{retry_delay}秒后重试...")
+                        time.sleep(retry_delay)
+                    else:
+                        print(f"  图片下载超时，已重试{max_retries}次，放弃下载")
+                        return None, None
+                except requests.exceptions.HTTPError as e:
+                    # 针对服务器错误（502, 503, 504等）使用更长的延迟
+                    status_code = e.response.status_code if e.response else None
+                    if status_code in [502, 503, 504, 429]:
+                        if attempt < max_retries - 1:
+                            # 服务器错误使用更长的延迟：5秒、10秒、15秒
+                            retry_delay = 5 * (attempt + 1)
+                            print(f"  服务器错误 {status_code}（尝试 {attempt + 1}/{max_retries}），{retry_delay}秒后重试...")
+                            time.sleep(retry_delay)
+                        else:
+                            print(f"  服务器错误 {status_code}，已重试{max_retries}次，放弃下载")
+                            return None, None
+                    else:
+                        # 其他HTTP错误（如404）直接放弃
+                        print(f"  HTTP错误 {status_code}，放弃下载")
+                        return None, None
+                except requests.exceptions.RequestException as e:
+                    if attempt < max_retries - 1:
+                        retry_delay = base_retry_delay * (attempt + 1)
+                        print(f"  图片下载失败（尝试 {attempt + 1}/{max_retries}）: {str(e)[:100]}，{retry_delay}秒后重试...")
+                        time.sleep(retry_delay)
+                    else:
+                        print(f"  图片下载失败，已重试{max_retries}次: {str(e)[:100]}")
+                        return None, None
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        retry_delay = base_retry_delay * (attempt + 1)
+                        print(f"  未知错误（尝试 {attempt + 1}/{max_retries}）: {str(e)[:100]}，{retry_delay}秒后重试...")
+                        time.sleep(retry_delay)
+                    else:
+                        raise
+            
+            if not response:
+                return None, None
             
             file_path = os.path.join(CRAWLED_IMAGES_DIR, file_name)
             
@@ -591,6 +664,7 @@ class WikipediaSpider:
         """
         判断图片是否与文化资源相关
         过滤掉logo、icon、banner、cover、二维码等无关图片
+        特别注意：过滤掉维基百科的特殊URL（如CentralAutoLogin等）
         """
         # 获取图片的alt、title、class等属性
         alt = (img_tag.get('alt', '') or '').lower()
@@ -604,16 +678,24 @@ class WikipediaSpider:
         # 获取图片URL的小写形式用于检查
         img_url_lower = img_url.lower()
         
-        # 需要过滤的关键词
+        # 1. 过滤掉维基百科的特殊URL（如CentralAutoLogin、Special等）
+        if 'special:' in img_url_lower or 'centralautologin' in img_url_lower:
+            return False
+        
+        # 2. 过滤掉明显无意义的URL路径
+        if '/thumb/' in img_url_lower and ('1px' in img_url_lower or '2px' in img_url_lower or '3px' in img_url_lower):
+            return False
+        
+        # 3. 需要过滤的关键词
         filter_keywords = [
             'logo', 'icon', 'banner', 'cover', 'header', 'footer', 'nav',
             'qrcode', 'qr-code', '二维码', 'qr', 'code',
             'ad', 'advertisement', '广告', 'promotion', '推广',
             'button', 'btn', 'arrow', 'back', 'next', 'prev',
             'avatar', '头像', 'user', 'member',
-            'thumb', 'thumbnail', 'small', 'tiny',
             'loading', 'spinner', 'placeholder', 'empty',
-            'stub', 'disambig'  # 维基百科的占位图和消歧义图
+            'stub', 'disambig',  # 维基百科的占位图和消歧义图
+            'wikimedia-button', 'wikimedia-logo', 'wikimedia-commons'
         ]
         
         # 检查是否包含过滤关键词
@@ -622,14 +704,27 @@ class WikipediaSpider:
             if keyword in check_text:
                 return False
         
-        # 检查图片尺寸（通过URL中的尺寸参数）
+        # 4. 检查图片尺寸（通过URL中的尺寸参数）
         # 维基百科的缩略图通常包含尺寸信息，如 /thumb/.../220px-...
         size_match = re.search(r'(\d+)px', img_url_lower)
         if size_match:
             size = int(size_match.group(1))
-            # 如果图片尺寸小于150px，可能是图标，过滤掉
-            if size < 150:
+            # 如果图片尺寸小于200px，可能是图标，过滤掉（提高阈值）
+            if size < 200:
                 return False
+        
+        # 5. 检查图片的width和height属性（如果存在）
+        width = img_tag.get('width')
+        height = img_tag.get('height')
+        if width and height:
+            try:
+                width_val = int(str(width).replace('px', ''))
+                height_val = int(str(height).replace('px', ''))
+                # 如果图片尺寸小于200x200，过滤掉
+                if width_val < 200 or height_val < 200:
+                    return False
+            except:
+                pass
         
         return True
     
@@ -637,7 +732,10 @@ class WikipediaSpider:
         """从节日页面提取图片（只提取与文化资源相关的图片）"""
         soup = BeautifulSoup(html_content, 'html.parser')
         
-        # 优先从信息框（infobox）中提取图片
+        # 收集所有候选图片
+        candidate_images = []
+        
+        # 1. 优先从信息框（infobox）中提取图片
         infobox = soup.find('table', class_=re.compile('infobox'))
         if infobox:
             img_tag = infobox.find('img')
@@ -651,30 +749,81 @@ class WikipediaSpider:
                     
                     # 检查是否是文化资源相关的图片
                     if self._is_cultural_image(img_tag, src):
-                        return {
+                        # 获取图片尺寸信息（用于排序）
+                        width = img_tag.get('width')
+                        height = img_tag.get('height')
+                        size_score = 0
+                        if width and height:
+                            try:
+                                width_val = int(str(width).replace('px', ''))
+                                height_val = int(str(height).replace('px', ''))
+                                size_score = width_val * height_val
+                            except:
+                                pass
+                        
+                        candidate_images.append({
                             'url': src,
                             'alt': img_tag.get('alt', ''),
-                            'title': img_tag.get('title', '')
-                        }
+                            'title': img_tag.get('title', ''),
+                            'size_score': size_score,
+                            'source': 'infobox'
+                        })
         
-        # 如果信息框没有图片，从内容区域提取第一张符合条件的图片
+        # 2. 从内容区域提取图片
         content_area = soup.find('div', id='mw-content-text')
         if content_area:
             for img_tag in content_area.find_all('img'):
                 src = img_tag.get('src') or img_tag.get('data-src')
-                if src:
-                    if src.startswith('//'):
-                        src = 'https:' + src
-                    elif src.startswith('/'):
-                        src = urljoin(BASE_URL, src)
+                if not src:
+                    continue
+                
+                if src.startswith('//'):
+                    src = 'https:' + src
+                elif src.startswith('/'):
+                    src = urljoin(BASE_URL, src)
+                
+                # 检查是否是文化资源相关的图片
+                if self._is_cultural_image(img_tag, src):
+                    # 获取图片尺寸信息（用于排序）
+                    width = img_tag.get('width')
+                    height = img_tag.get('height')
+                    size_score = 0
+                    if width and height:
+                        try:
+                            width_val = int(str(width).replace('px', ''))
+                            height_val = int(str(height).replace('px', ''))
+                            size_score = width_val * height_val
+                        except:
+                            pass
                     
-                    # 检查是否是文化资源相关的图片
-                    if self._is_cultural_image(img_tag, src):
-                        return {
-                            'url': src,
-                            'alt': img_tag.get('alt', ''),
-                            'title': img_tag.get('title', '')
-                        }
+                    candidate_images.append({
+                        'url': src,
+                        'alt': img_tag.get('alt', ''),
+                        'title': img_tag.get('title', ''),
+                        'size_score': size_score,
+                        'source': 'content'
+                    })
+        
+        # 3. 选择最佳图片（优先选择infobox中的，其次选择尺寸最大的）
+        if candidate_images:
+            # 优先选择infobox中的图片
+            infobox_images = [img for img in candidate_images if img['source'] == 'infobox']
+            if infobox_images:
+                # 选择尺寸最大的
+                best_image = max(infobox_images, key=lambda x: x['size_score'])
+                return {
+                    'url': best_image['url'],
+                    'alt': best_image['alt'],
+                    'title': best_image['title']
+                }
+            else:
+                # 如果没有infobox图片，选择尺寸最大的内容图片
+                best_image = max(candidate_images, key=lambda x: x['size_score'])
+                return {
+                    'url': best_image['url'],
+                    'alt': best_image['alt'],
+                    'title': best_image['title']
+                }
         
         return None
     

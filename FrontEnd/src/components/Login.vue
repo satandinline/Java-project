@@ -347,6 +347,7 @@ const handleLogin = async () => {
         id: result.user_info.id,
         account: result.user_info.account,
         nickname: result.user_info.nickname || result.user_info.account,
+        signature: result.user_info.signature || null,
         avatar_path: result.user_info.avatar_path || '/default.jpg',
         role: result.user_info.role
       };
@@ -428,14 +429,16 @@ const handleRegister = async () => {
       const userInfo = result.user_info;
       errorMessage.value = '';
       
-      // 显示成功消息，包含生成的账号
-      alert(`注册成功！\n您的账号：${userInfo.account}\n请妥善保管，可直接登录。`);
+      // 显示成功消息，包含生成的账号（使用更明显的提示框）
+      const accountMessage = `注册成功！\n\n您的账号：${userInfo.account}\n\n⚠️ 重要提示：\n请务必记住或保存您的账号！\n账号是您登录的唯一凭证。\n\n点击"确定"后，账号信息也会显示在页面顶部。`;
+      alert(accountMessage);
       
       // 保存用户信息到本地存储
       localStorage.setItem('userInfo', JSON.stringify({
         id: userInfo.id,
         account: userInfo.account,
         nickname: userInfo.nickname || userInfo.account,
+        signature: userInfo.signature || null,
         avatar_path: userInfo.avatar_path || '/default.jpg',
         role: userInfo.role
       }));
@@ -446,7 +449,7 @@ const handleRegister = async () => {
       // 延迟跳转，让用户看到成功消息
       setTimeout(() => {
         router.push('/');
-      }, 1000);
+      }, 1500);
     } else {
       errorMessage.value = result.message || '注册失败，请重试';
     }
@@ -459,8 +462,8 @@ const handleRegister = async () => {
 };
 
 const getSecurityQuestion = async () => {
-  if (!forgotUsername.value.trim()) {
-    errorMessage.value = '请输入用户名';
+  if (!forgotAccount.value.trim()) {
+    errorMessage.value = '请输入账号';
     return;
   }
 
@@ -608,7 +611,7 @@ const resetPassword = async () => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        username: forgotUsername.value.trim(),
+        account: forgotAccount.value.trim(),
         new_password: newPassword.value
       })
     });

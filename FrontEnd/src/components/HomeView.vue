@@ -144,6 +144,13 @@ const fetchResources = async (page = 1) => {
   isLoading.value = true;
   
   try {
+    // 如果URL中有page参数，使用URL中的页码
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlPage = urlParams.get('page');
+    if (urlPage && parseInt(urlPage) > 0) {
+      page = parseInt(urlPage);
+    }
+    
     const response = await fetch(`/api/home/resources?page=${page}&page_size=8`);
     
     // 检查响应状态
@@ -155,9 +162,20 @@ const fetchResources = async (page = 1) => {
     
     if (data.success) {
       resourceList.value = data.resources || [];
-      currentPage.value = data.pagination?.page || 1;
+      currentPage.value = data.pagination?.page || page;
       totalPages.value = data.pagination?.total_pages || 1;
       jumpPage.value = currentPage.value;
+      
+      // 更新URL中的页码（不刷新页面）
+      if (currentPage.value > 1) {
+        const newUrl = new URL(window.location.href);
+        newUrl.searchParams.set('page', currentPage.value.toString());
+        window.history.replaceState({}, '', newUrl);
+      } else {
+        const newUrl = new URL(window.location.href);
+        newUrl.searchParams.delete('page');
+        window.history.replaceState({}, '', newUrl);
+      }
       
       // 如果资源列表为空，输出提示
       if (resourceList.value.length === 0) {
@@ -205,10 +223,12 @@ const handleSearchAI = () => {
   });
 };
 
-// 跳转到资源详情页
+// 跳转到资源详情页（保存当前页码）
 const goToResourceDetail = (item) => {
   const festivalName = item.festival_name || item.entity_name;
   if (festivalName) {
+    // 保存当前页码到sessionStorage
+    sessionStorage.setItem('lastResourcePage', currentPage.value.toString());
     router.push({
       path: '/resource/detail',
       query: { 
@@ -298,8 +318,11 @@ onMounted(async () => {
     alert('无法连接到后端服务，请确认后端服务已启动。\n\n请检查：\n1. 后端服务是否正在运行\n2. 查看终端窗口的错误信息\n3. 防火墙设置');
   }
   
-  // 加载资源列表
-  fetchResources(1);
+  // 加载资源列表（检查URL中的page参数）
+  const urlParams = new URLSearchParams(window.location.search);
+  const urlPage = urlParams.get('page');
+  const initialPage = urlPage && parseInt(urlPage) > 0 ? parseInt(urlPage) : 1;
+  fetchResources(initialPage);
 });
 </script>
 

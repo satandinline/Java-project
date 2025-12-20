@@ -10,6 +10,7 @@ AIGC API服务器
 import os
 import sys
 import json
+import hashlib
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -442,7 +443,8 @@ def register():
                     import os
                     import shutil
                     if os.path.exists(avatar_path):
-                        public_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'FrontEnd', 'public')
+                        # 使用项目根目录的public文件夹（与start_dev.bat同目录）
+                        public_dir = os.path.join(project_root, 'public')
                         os.makedirs(public_dir, exist_ok=True)
                         
                         # 获取文件扩展名
@@ -558,6 +560,106 @@ def update_nickname():
         print(f"[API] 修改昵称失败: {e}")
         return jsonify({'success': False, 'message': f'修改昵称失败：{str(e)}'}), 500
 
+@app.route('/api/auth/update-signature', methods=['POST'])
+def update_signature():
+    """修改个人签名"""
+    try:
+        user_id = request.headers.get('X-User-Id') or request.json.get('user_id')
+        if not user_id:
+            return jsonify({'success': False, 'message': '缺少用户信息'}), 400
+        
+        user_id = int(user_id)
+        data = request.json
+        signature = data.get('signature', '').strip()
+        
+        if len(signature) > 500:
+            return jsonify({'success': False, 'message': '个人签名长度不能超过500个字符'}), 400
+        
+        from db_connection import get_user_db_connection
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE users SET signature = %s WHERE id = %s",
+                    (signature, user_id)
+                )
+                conn.commit()
+            
+            # 返回更新后的用户信息
+            user_info = auth_system.get_user_by_id(user_id)
+            if user_info:
+                return jsonify({
+                    'success': True,
+                    'message': '个人签名修改成功',
+                    'user_info': {
+                        'id': user_info.get('id'),
+                        'account': user_info.get('account'),
+                        'nickname': user_info.get('nickname'),
+                        'signature': user_info.get('signature'),
+                        'avatar_path': user_info.get('avatar_path'),
+                        'role': user_info.get('role')
+                    }
+                })
+            else:
+                return jsonify({'success': True, 'message': '个人签名修改成功'})
+        finally:
+            if conn:
+                conn.close()
+    except Exception as e:
+        print(f"[API] 修改个人签名失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'修改个人签名失败：{str(e)}'}), 500
+
+@app.route('/api/auth/delete-account', methods=['POST'])
+def delete_account():
+    """注销账号（删除用户及其所有数据）"""
+    try:
+        user_id = request.headers.get('X-User-Id') or request.json.get('user_id')
+        if not user_id:
+            return jsonify({'success': False, 'message': '缺少用户信息'}), 400
+        
+        user_id = int(user_id)
+        data = request.json
+        password = data.get('password', '')
+        
+        if not password:
+            return jsonify({'success': False, 'message': '请输入密码确认'}), 400
+        
+        # 验证密码
+        user_info = auth_system.get_user_by_id(user_id)
+        if not user_info:
+            return jsonify({'success': False, 'message': '用户不存在'}), 404
+        
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        if user_info.get('password_hash') != password_hash:
+            return jsonify({'success': False, 'message': '密码错误'}), 400
+        
+        # 删除用户及其所有数据
+        from db_connection import get_user_db_connection
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor() as cursor:
+                # 删除用户的所有数据（根据外键约束，相关数据会被级联删除或设置为NULL）
+                cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
+                conn.commit()
+            
+            return jsonify({'success': True, 'message': '账号已注销'})
+        finally:
+            if conn:
+                conn.close()
+    except Exception as e:
+        print(f"[API] 注销账号失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'注销账号失败：{str(e)}'}), 500
+
 @app.route('/api/auth/user', methods=['GET'])
 def get_user():
     """获取当前用户信息（通过user_id参数）"""
@@ -571,11 +673,12 @@ def get_user():
             # 不返回敏感信息（密码哈希、安全问题答案哈希）
             safe_user_info = {
                 'id': user_info.get('id'),
-                'account': user_info.get('account'),
-                'nickname': user_info.get('nickname'),
-                'avatar_path': user_info.get('avatar_path'),
-                'role': user_info.get('role'),
-                'security_question': user_info.get('security_question')
+            'account': user_info.get('account'),
+            'nickname': user_info.get('nickname'),
+            'signature': user_info.get('signature'),
+            'avatar_path': user_info.get('avatar_path'),
+            'role': user_info.get('role'),
+            'security_question': user_info.get('security_question')
             }
             return jsonify({'success': True, 'user_info': safe_user_info})
         else:
@@ -1685,80 +1788,39 @@ def get_home_resources():
             with conn.cursor() as cursor:
                 resources = []
                 
-                # 1. 从crawled_images表获取图片资源，按节日分组，每个节日只取第一张图片
-                # 首先获取所有图片，按节日名称分组
+                # 1. 从crawled_images表获取图片资源，按resource_id或entity_id分组
+                # 优先选择有resource_id和entity_id的图片，每个资源只取第一张图片（优先非default图片）
                 cursor.execute("""
                     SELECT id, file_name, storage_path, tags, dimensions, crawl_time, 
                            resource_id, entity_id, festival_name
                     FROM crawled_images
-                    ORDER BY crawl_time DESC
+                    WHERE resource_id IS NOT NULL AND entity_id IS NOT NULL
+                    ORDER BY 
+                        CASE WHEN file_name != 'default.jpg' THEN 0 ELSE 1 END,
+                        crawl_time DESC
                 """)
                 
                 all_images = cursor.fetchall()
                 
-                # 按节日名称分组，每个节日只保留第一张图片（基准图片，文件名格式为 数字.扩展名）
-                festival_images = {}  # {festival_name: first_image}
-                seen_festivals = set()
+                # 按resource_id分组，每个资源只保留第一张图片（优先非default图片）
+                resource_images = {}  # {resource_id: best_image}
                 
                 for img in all_images:
-                    # 从tags字段提取节日名称
-                    festival_name = None
-                    entity_name = ""
-                    description = ""
-                    
-                    if img.get('tags'):
-                        try:
-                            tags_data = json.loads(img['tags']) if isinstance(img['tags'], str) else img['tags']
-                            if isinstance(tags_data, list) and tags_data:
-                                # tags的第一个元素通常是节日名称
-                                for tag in tags_data:
-                                    if isinstance(tag, str):
-                                        # 匹配第一个汉字到下一个非汉字之前的内容作为节日名称
-                                        match = re.search(r'([\u4e00-\u9fa5]+)', tag)
-                                        if match:
-                                            festival_name = match.group(1)
-                                            entity_name = festival_name
-                                            # 提取描述
-                                            desc_match = re.search(r'([\u4e00-\u9fa5]+[^\u4e00-\u9fa5]*)', tag)
-                                            if desc_match:
-                                                description = desc_match.group(1).strip()[:100]
-                                            else:
-                                                description = tag[:100] if len(tag) > 100 else tag
-                                            break
-                        except Exception as e:
-                            print(f"解析tags失败: {e}")
-                            pass
-                    
-                    # 如果tags中没有找到节日名称，尝试从文件名推断
-                    if not festival_name and img.get('file_name'):
-                        file_name = img['file_name']
-                        # 检查文件名格式：如果是 "8.jpg" 格式，说明是基准图片
-                        # 如果是 "8-1.jpg" 格式，提取基准序号 "8"
-                        base_match = re.match(r'^(\d+)(?:-\d+)?\.', file_name)
-                        if base_match:
-                            base_index = base_match.group(1)
-                            # 如果文件名是 "8.jpg" 格式（没有 -1），说明是基准图片
-                            if not re.match(r'^\d+-\d+\.', file_name):
-                                # 这是基准图片，但如果没有节日名称，使用文件名作为标识
-                                if not festival_name:
-                                    festival_name = f"资源_{base_index}"
-                                    entity_name = festival_name
-                    
-                    # 如果还是没有节日名称，跳过
-                    if not festival_name:
+                    resource_id = img.get('resource_id')
+                    if not resource_id:
                         continue
                     
-                    # 检查文件名格式：只选择基准图片（格式为 数字.扩展名，不是 数字-数字.扩展名）
-                    file_name = img.get('file_name', '')
-                    is_base_image = bool(re.match(r'^\d+\.', file_name))
-                    
-                    # 每个节日只保留第一张基准图片
-                    if is_base_image and festival_name not in seen_festivals:
-                        seen_festivals.add(festival_name)
-                        festival_images[festival_name] = img
+                    # 如果这个资源还没有图片，或者当前图片不是default且已有的是default，则替换
+                    if resource_id not in resource_images:
+                        resource_images[resource_id] = img
+                    else:
+                        existing = resource_images[resource_id]
+                        # 如果已有的是default，当前不是default，则替换
+                        if existing.get('file_name') == 'default.jpg' and img.get('file_name') != 'default.jpg':
+                            resource_images[resource_id] = img
                 
                 # 转换为列表并按时间排序
-                festival_list = list(festival_images.values())
+                festival_list = list(resource_images.values())
                 festival_list.sort(key=lambda x: x.get('crawl_time', ''), reverse=True)
                 
                 # 分页处理
@@ -1767,12 +1829,14 @@ def get_home_resources():
                 end_idx = start_idx + page_size
                 paginated_images = festival_list[start_idx:end_idx]
                 
+                print(f"[API] 找到 {total_count} 个资源，当前页显示 {len(paginated_images)} 个")
+                
                 # 构建资源列表
                 for img in paginated_images:
                     # 优先通过entity_id关联查询cultural_entities表（最准确的方式）
                     entity_id = img.get('entity_id')
                     resource_id = img.get('resource_id')
-                    festival_name = img.get('festival_name')
+                    festival_name = img.get('festival_name')  # 从数据库字段直接获取
                     
                     entity_name = ""
                     description = ""
@@ -2003,37 +2067,120 @@ def get_resource_detail():
         
         try:
             with conn.cursor() as cursor:
-                # 查找该节日的所有图片（通过tags字段匹配节日名称）
+                # 优先通过entity_id关联查询cultural_entities表获取完整信息
+                entity_name = festival_name
+                description = ""
+                entity_id = None
+                
+                # 1. 先尝试通过entity_name精确匹配或模糊匹配查找实体
                 cursor.execute("""
-                    SELECT id, file_name, storage_path, tags, dimensions, crawl_time
-                    FROM crawled_images
-                    WHERE tags LIKE %s
-                    ORDER BY 
-                        CASE 
-                            WHEN file_name REGEXP '^[0-9]+\\.[a-zA-Z]+$' THEN 1
-                            WHEN file_name REGEXP '^[0-9]+-[0-9]+\\.[a-zA-Z]+$' THEN 2
-                            ELSE 3
-                        END,
-                        CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(file_name, '-', 1), '.', 1) AS UNSIGNED),
-                        CASE 
-                            WHEN file_name REGEXP '^[0-9]+-[0-9]+\\.[a-zA-Z]+$' 
-                            THEN CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(file_name, '-', -1), '.', 1) AS UNSIGNED)
-                            ELSE 0
-                        END
-                """, (f'%{festival_name}%',))
+                    SELECT id, entity_name, description, entity_type, cultural_value
+                    FROM cultural_entities
+                    WHERE entity_name = %s OR entity_name LIKE %s
+                    ORDER BY CASE WHEN entity_name = %s THEN 1 ELSE 2 END
+                    LIMIT 1
+                """, (festival_name, f'%{festival_name}%', festival_name))
+                entity_info = cursor.fetchone()
+                
+                if entity_info:
+                    entity_id = entity_info.get('id')
+                    entity_name = entity_info.get('entity_name', festival_name)
+                    description = entity_info.get('description', '') or ''
+                    # 不限制描述长度，返回完整描述
+                
+                # 2. 查找该节日的所有图片（优先通过entity_id，如果没有则通过tags匹配）
+                if entity_id:
+                    # 通过entity_id关联查询（最准确）
+                    cursor.execute("""
+                        SELECT id, file_name, storage_path, tags, dimensions, crawl_time, resource_id, entity_id
+                        FROM crawled_images
+                        WHERE entity_id = %s
+                        ORDER BY 
+                            CASE 
+                                WHEN file_name != 'default.jpg' THEN 0
+                                ELSE 1
+                            END,
+                            CASE 
+                                WHEN file_name REGEXP '^[0-9]+\\.[a-zA-Z]+$' THEN 1
+                                WHEN file_name REGEXP '^[0-9]+-[0-9]+\\.[a-zA-Z]+$' THEN 2
+                                ELSE 3
+                            END,
+                            CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(file_name, '-', 1), '.', 1) AS UNSIGNED),
+                            CASE 
+                                WHEN file_name REGEXP '^[0-9]+-[0-9]+\\.[a-zA-Z]+$' 
+                                THEN CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(file_name, '-', -1), '.', 1) AS UNSIGNED)
+                                ELSE 0
+                            END
+                    """, (entity_id,))
+                else:
+                    # 通过tags字段匹配节日名称（备用方案）
+                    cursor.execute("""
+                        SELECT id, file_name, storage_path, tags, dimensions, crawl_time, resource_id, entity_id
+                        FROM crawled_images
+                        WHERE tags LIKE %s OR festival_name = %s
+                        ORDER BY 
+                            CASE 
+                                WHEN file_name != 'default.jpg' THEN 0
+                                ELSE 1
+                            END,
+                            CASE 
+                                WHEN file_name REGEXP '^[0-9]+\\.[a-zA-Z]+$' THEN 1
+                                WHEN file_name REGEXP '^[0-9]+-[0-9]+\\.[a-zA-Z]+$' THEN 2
+                                ELSE 3
+                            END,
+                            CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(file_name, '-', 1), '.', 1) AS UNSIGNED),
+                            CASE 
+                                WHEN file_name REGEXP '^[0-9]+-[0-9]+\\.[a-zA-Z]+$' 
+                                THEN CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(file_name, '-', -1), '.', 1) AS UNSIGNED)
+                                ELSE 0
+                            END
+                    """, (f'%{festival_name}%', festival_name))
                 
                 images = cursor.fetchall()
                 
-                # 即使没有图片，也尝试从cultural_entities表获取资源信息
+                # 3. 如果通过图片找到了entity_id，但没有描述，再次查询
+                if not description and images:
+                    for img in images:
+                        img_entity_id = img.get('entity_id')
+                        if img_entity_id:
+                            cursor.execute("""
+                                SELECT entity_name, description
+                                FROM cultural_entities
+                                WHERE id = %s
+                                LIMIT 1
+                            """, (img_entity_id,))
+                            entity_info = cursor.fetchone()
+                            if entity_info:
+                                entity_name = entity_info.get('entity_name', entity_name)
+                                description = entity_info.get('description', '') or description
+                                break
+                
+                # 4. 如果还是没有描述，尝试从resource_id关联查询
+                if not description and images:
+                    for img in images:
+                        resource_id = img.get('resource_id')
+                        if resource_id:
+                            cursor.execute("""
+                                SELECT cr.content_feature_data
+                                FROM cultural_resources cr
+                                WHERE cr.id = %s
+                                LIMIT 1
+                            """, (resource_id,))
+                            resource_info = cursor.fetchone()
+                            if resource_info and resource_info.get('content_feature_data'):
+                                try:
+                                    content_data = json.loads(resource_info['content_feature_data'] or '{}')
+                                    if isinstance(content_data, dict):
+                                        description = content_data.get('text', '') or description
+                                        if not entity_name or entity_name == festival_name:
+                                            entity_name = content_data.get('title', entity_name)
+                                except:
+                                    pass
+                            if description:
+                                break
+                
+                # 5. 即使没有图片，也返回实体信息
                 if not images:
-                    # 尝试从cultural_entities表获取资源信息
-                    cursor.execute("""
-                        SELECT entity_name, description, entity_type, cultural_value
-                        FROM cultural_entities
-                        WHERE entity_name LIKE %s
-                        LIMIT 1
-                    """, (f'%{festival_name}%',))
-                    entity_info = cursor.fetchone()
                     if entity_info:
                         # 如果没有图片，使用default图片
                         default_image = {
@@ -2046,8 +2193,8 @@ def get_resource_detail():
                         return jsonify({
                             'success': True,
                             'festival_name': festival_name,
-                            'entity_name': entity_info.get('entity_name', festival_name),
-                            'description': entity_info.get('description', '') or '暂无简介',
+                            'entity_name': entity_name,
+                            'description': description or '暂无简介',
                             'images': [default_image],
                             'total_images': 1
                         })
@@ -2056,22 +2203,6 @@ def get_resource_detail():
                             'success': False,
                             'message': f'未找到节日"{festival_name}"的资源'
                         }), 404
-                
-                # 先尝试从cultural_entities表获取资源信息和描述（优先获取）
-                entity_name = festival_name
-                description = ""
-                cursor.execute("""
-                    SELECT entity_name, description, entity_type, cultural_value
-                    FROM cultural_entities
-                    WHERE entity_name LIKE %s
-                    LIMIT 1
-                """, (f'%{festival_name}%',))
-                entity_info = cursor.fetchone()
-                if entity_info:
-                    entity_name = entity_info.get('entity_name', festival_name)
-                    description = entity_info.get('description', '') or ''
-                    if description:
-                        description = description[:500]  # 限制长度但保留更多内容
                 
                 # 构建图片列表
                 image_list = []

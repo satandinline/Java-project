@@ -18,7 +18,7 @@
           <router-link to="/annotation" class="text-link">标注任务</router-link>
           
           <!-- 设置入口 -->
-          <div class="settings-link" @click="showSettingsModal = true">
+          <div class="settings-link" @click="handleSettingsClick">
             <span>⚙️</span> 设置
           </div>
           
@@ -30,35 +30,152 @@
           <!-- 用户头像和昵称 -->
           <div class="user-profile">
             <div class="user-profile-content">
-              <div class="user-avatar-container">
+              <div class="user-avatar-container" @click="handleAvatarClick" style="cursor: pointer;">
                 <img :src="getAvatarUrl(userInfo?.avatar_path)" class="user-avatar" alt="头像" @error="handleAvatarError" />
               </div>
-              <div class="user-nickname">{{ userInfo?.nickname || userInfo?.account || '用户' }}</div>
+              <div class="user-info">
+                <div class="user-nickname">{{ userInfo?.nickname || userInfo?.account || '用户' }}</div>
+              </div>
             </div>
           </div>
         </div>
         
         <!-- 设置对话框 -->
-        <div v-if="showSettingsModal" class="modal-overlay" @click="showSettingsModal = false">
+        <div v-if="showSettingsModal" class="modal-overlay" @click="fromAvatarClick ? closeSettingsModal() : (showSettingsModal = false)">
           <div class="modal-content settings-modal" @click.stop>
-            <h3>设置</h3>
-            <div class="settings-tabs">
-              <div class="tab-item" :class="{ active: settingsTab === 'avatar' }" @click="settingsTab = 'avatar'">
-                🖼️ 更换头像
+            <!-- 如果点击头像进入，只显示更换头像功能（不显示设置列表） -->
+            <!-- 否则显示完整的设置列表 -->
+            <div v-if="settingsTab === '' && !fromAvatarClick">
+              <div class="modal-header">
+                <h3>设置</h3>
+                <button class="close-btn" @click="showSettingsModal = false">×</button>
               </div>
-              <div class="tab-item" :class="{ active: settingsTab === 'password' }" @click="handlePasswordTabClick">
-                🔒 修改密码
+              
+              <!-- 设置列表（美化后的样式） -->
+              <div class="settings-list">
+                <!-- 账号（仅显示） -->
+                <div class="settings-item readonly">
+                  <div class="settings-item-content">
+                    <span class="settings-item-label">账号</span>
+                    <span class="settings-item-value">{{ userInfo?.account || '未知' }}</span>
+                  </div>
+                </div>
+                
+                <!-- 昵称（可点击修改） -->
+                <div class="settings-item clickable" @click="handleNicknameClick">
+                  <div class="settings-item-content">
+                    <div class="settings-item-main">
+                      <span class="settings-item-label">昵称</span>
+                      <span class="settings-item-arrow">›</span>
+                    </div>
+                    <div class="settings-item-sub">{{ userInfo?.nickname || '未设置' }}</div>
+                  </div>
+                </div>
+                
+                <!-- 个人签名（可点击设置） -->
+                <div class="settings-item clickable" @click="handleSignatureClick">
+                  <div class="settings-item-content">
+                    <div class="settings-item-main">
+                      <span class="settings-item-label">个人签名</span>
+                      <span class="settings-item-arrow">›</span>
+                    </div>
+                    <div class="settings-item-sub">{{ (userInfo?.signature && userInfo.signature.trim()) || '未设置' }}</div>
+                  </div>
+                </div>
+                
+                <!-- 修改密码（可点击） -->
+                <div class="settings-item clickable" @click="handlePasswordClick">
+                  <div class="settings-item-content">
+                    <div class="settings-item-main">
+                      <span class="settings-item-label">修改密码</span>
+                      <span class="settings-item-arrow">›</span>
+                    </div>
+                  </div>
+                </div>
+                
+                <!-- 更换二级问题（可点击） -->
+                <div class="settings-item clickable" @click="handleSecurityClick">
+                  <div class="settings-item-content">
+                    <div class="settings-item-main">
+                      <span class="settings-item-label">更换二级问题</span>
+                      <span class="settings-item-arrow">›</span>
+                    </div>
+                  </div>
+                </div>
+                
+                <!-- 退出登录 -->
+                <div class="settings-item clickable logout-item" @click="handleLogout">
+                  <div class="settings-item-content">
+                    <span class="settings-item-label">退出登录</span>
+                  </div>
+                </div>
+                
+                <!-- 注销账号 -->
+                <div class="settings-item clickable delete-item" @click="handleDeleteAccountClick">
+                  <div class="settings-item-content">
+                    <span class="settings-item-label">注销账号</span>
+                  </div>
+                </div>
               </div>
-              <div class="tab-item" :class="{ active: settingsTab === 'security' }" @click="handleSecurityTabClick">
-                🔐 更换二级问题
+            </div>
+            
+            <!-- 修改昵称面板 -->
+            <div v-if="settingsTab === 'nickname'" class="settings-panel">
+              <div class="modal-header">
+                <h3>修改昵称</h3>
+                <button class="close-btn" @click="settingsTab = ''">×</button>
               </div>
-              <div class="tab-item logout-item" @click="handleLogout">
-                🚪 退出登录
+              <div class="input-group">
+                <label>新昵称</label>
+                <input type="text" v-model="newNickname" :placeholder="`当前昵称：${userInfo?.nickname || '未设置'}`" maxlength="100" />
+              </div>
+              <div v-if="changeNicknameError" class="error-message">
+                {{ changeNicknameError }}
+              </div>
+              <div v-if="changeNicknameSuccess" class="success-message">
+                {{ changeNicknameSuccess }}
+              </div>
+              <div class="modal-actions">
+                <button @click="handleChangeNickname" class="submit-btn">确认修改</button>
+                <button @click="settingsTab = ''" class="cancel-btn">返回</button>
+              </div>
+            </div>
+            
+            <!-- 个人签名面板 -->
+            <div v-if="settingsTab === 'signature'" class="settings-panel">
+              <div class="modal-header">
+                <h3>个人签名</h3>
+                <button class="close-btn" @click="settingsTab = ''">×</button>
+              </div>
+              <div class="input-group">
+                <label>个人签名</label>
+                <textarea v-model="newSignature" placeholder="请输入个人签名（最多500字）" maxlength="500" rows="4" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; resize: vertical; font-family: inherit;"></textarea>
+                <div style="text-align: right; color: #999; font-size: 12px; margin-top: 4px;">
+                  {{ newSignature.length }}/500
+                </div>
+              </div>
+              <div v-if="changeSignatureError" class="error-message">
+                {{ changeSignatureError }}
+              </div>
+              <div v-if="changeSignatureSuccess" class="success-message">
+                {{ changeSignatureSuccess }}
+              </div>
+              <div class="modal-actions">
+                <button @click="handleChangeSignature" class="submit-btn">确认修改</button>
+                <button @click="settingsTab = ''" class="cancel-btn">返回</button>
               </div>
             </div>
             
             <!-- 更换头像 -->
             <div v-if="settingsTab === 'avatar'" class="settings-panel">
+              <div class="modal-header" v-if="!fromAvatarClick">
+                <h3>更换头像</h3>
+                <button class="close-btn" @click="settingsTab = ''">×</button>
+              </div>
+              <div class="modal-header" v-else>
+                <h3>更换头像</h3>
+                <button class="close-btn" @click="closeSettingsModal()">×</button>
+              </div>
               <div class="input-group">
                 <label>选择操作</label>
                 <div class="avatar-options">
@@ -121,7 +238,7 @@
               <div class="modal-actions">
                 <button v-if="showAvatarCrop" @click="handleConfirmAvatarUpload" class="submit-btn">确认更换</button>
                 <button v-else-if="showAvatarUpload && newAvatarFile" @click="handleConfirmAvatarUpload" class="submit-btn">确认上传</button>
-                <button @click="showSettingsModal = false" class="cancel-btn">关闭</button>
+                <button @click="fromAvatarClick ? closeSettingsModal() : (settingsTab = '')" class="cancel-btn">返回</button>
               </div>
             </div>
             
@@ -163,14 +280,18 @@
               <div v-if="changePasswordSuccess" class="success-message">
                 {{ changePasswordSuccess }}
               </div>
-              <div class="modal-actions">
-                <button @click="handleChangePassword" class="submit-btn">确认修改</button>
-                <button @click="showSettingsModal = false" class="cancel-btn">关闭</button>
-              </div>
+                <div class="modal-actions">
+                  <button @click="handleChangePassword" class="submit-btn">确认修改</button>
+                  <button @click="fromAvatarClick ? closeSettingsModal() : (settingsTab = '')" class="cancel-btn">返回</button>
+                </div>
             </div>
             
             <!-- 更换二级问题 -->
             <div v-if="settingsTab === 'security'" class="settings-panel">
+              <div class="modal-header">
+                <h3>更换二级问题</h3>
+                <button class="close-btn" @click="settingsTab = ''">×</button>
+              </div>
               <div v-if="!currentSecurityQuestion" class="input-group">
                 <p class="security-question-display">您尚未设置二级问题</p>
                 <label>新问题</label>
@@ -185,7 +306,7 @@
                 </div>
                 <div class="modal-actions">
                   <button @click="handleChangeSecurityQuestion" class="submit-btn">确认设置</button>
-                  <button @click="showSettingsModal = false" class="cancel-btn">关闭</button>
+                  <button @click="fromAvatarClick ? closeSettingsModal() : (settingsTab = '')" class="cancel-btn">返回</button>
                 </div>
               </div>
               <div v-else-if="!securityAnswerVerified" class="input-group">
@@ -197,7 +318,7 @@
                 </div>
                 <div class="modal-actions">
                   <button @click="handleVerifySecurityAnswer" class="submit-btn">验证</button>
-                  <button @click="showSettingsModal = false" class="cancel-btn">关闭</button>
+                  <button @click="fromAvatarClick ? closeSettingsModal() : (settingsTab = '')" class="cancel-btn">返回</button>
                 </div>
               </div>
               <div v-else class="input-group">
@@ -213,8 +334,26 @@
                 </div>
                 <div class="modal-actions">
                   <button @click="handleChangeSecurityQuestion" class="submit-btn">确认更换</button>
-                  <button @click="showSettingsModal = false" class="cancel-btn">关闭</button>
+                  <button @click="fromAvatarClick ? closeSettingsModal() : (settingsTab = '')" class="cancel-btn">返回</button>
                 </div>
+              </div>
+            </div>
+            
+            <!-- 注销账号确认对话框 -->
+            <div v-if="showDeleteAccountConfirm" class="settings-panel">
+              <div class="input-group">
+                <p style="color: #f56c6c; font-weight: bold; margin-bottom: 16px;">
+                  警告：注销账号后将永久删除您的所有数据，此操作不可恢复！
+                </p>
+                <label>请输入密码确认</label>
+                <input type="password" v-model="deleteAccountPassword" placeholder="请输入密码" style="ime-mode: disabled;" />
+              </div>
+              <div v-if="deleteAccountError" class="error-message">
+                {{ deleteAccountError }}
+              </div>
+              <div class="modal-actions">
+                <button @click="handleConfirmDeleteAccount" class="submit-btn" style="background: #f56c6c;">确认注销</button>
+                <button @click="showDeleteAccountConfirm = false" class="cancel-btn">取消</button>
               </div>
             </div>
           </div>
@@ -237,7 +376,8 @@ const router = useRouter();
 // 登录状态
 const userInfo = ref(null);
 const showSettingsModal = ref(false);
-const settingsTab = ref('avatar'); // 'avatar', 'password', 'security'
+const settingsTab = ref(''); // '', 'nickname', 'signature', 'password', 'security', 'avatar'
+const fromAvatarClick = ref(false); // 标记是否从头像点击进入
 
 // 修改密码相关
 const oldPassword = ref('');
@@ -281,6 +421,11 @@ const securityAnswerForPassword = ref('');
 const newNickname = ref('');
 const changeNicknameError = ref('');
 const changeNicknameSuccess = ref('');
+
+// 修改个人签名相关
+const newSignature = ref('');
+const changeSignatureError = ref('');
+const changeSignatureSuccess = ref('');
 
 onMounted(() => {
   console.log('App.vue mounted');
@@ -344,7 +489,10 @@ const handleLoginSuccess = (userData) => {
   if (userInfo.value) {
     // 确保包含所有必要字段
     if (!userInfo.value.nickname) {
-      userInfo.value.nickname = userInfo.value.username;
+      userInfo.value.nickname = userInfo.value.account;
+    }
+    if (userInfo.value.signature === undefined) {
+      userInfo.value.signature = null;
     }
     if (!userInfo.value.avatar_path || userInfo.value.avatar_path === './default.jpg') {
       userInfo.value.avatar_path = '/default.jpg';
@@ -528,10 +676,17 @@ const uploadCroppedAvatar = async (croppedFile) => {
       showAvatarUpload.value = false;
       newAvatarFile.value = null;
       newAvatarPreview.value = null;
-      // 2秒后清空成功消息
-      setTimeout(() => {
-        changeAvatarSuccess.value = '';
-      }, 2000);
+      // 如果是从头像点击进入的，2秒后关闭对话框；否则清空成功消息
+      if (fromAvatarClick.value) {
+        setTimeout(() => {
+          changeAvatarSuccess.value = '';
+          closeSettingsModal();
+        }, 2000);
+      } else {
+        setTimeout(() => {
+          changeAvatarSuccess.value = '';
+        }, 2000);
+      }
     } else {
       changeAvatarError.value = result.message || '头像更换失败';
     }
@@ -607,10 +762,17 @@ const handleUseDefaultAvatar = async () => {
             // 更新用户信息
             userInfo.value.avatar_path = result.avatar_path || '/default.jpg';
             localStorage.setItem('userInfo', JSON.stringify(userInfo.value));
-            // 2秒后清空成功消息
-            setTimeout(() => {
-              changeAvatarSuccess.value = '';
-            }, 2000);
+            // 如果是从头像点击进入的，2秒后关闭对话框；否则清空成功消息
+            if (fromAvatarClick.value) {
+              setTimeout(() => {
+                changeAvatarSuccess.value = '';
+                closeSettingsModal();
+              }, 2000);
+            } else {
+              setTimeout(() => {
+                changeAvatarSuccess.value = '';
+              }, 2000);
+            }
           } else {
             changeAvatarError.value = result.message || '切换默认头像失败';
           }
@@ -914,9 +1076,10 @@ const handleChangeNickname = async () => {
         localStorage.setItem('userInfo', JSON.stringify(userInfo.value));
       }
       newNickname.value = '';
-      // 2秒后清空成功消息
+      // 2秒后返回设置列表
       setTimeout(() => {
         changeNicknameSuccess.value = '';
+        settingsTab.value = '';
       }, 2000);
     } else {
       changeNicknameError.value = result.message || '修改昵称失败';
@@ -924,6 +1087,169 @@ const handleChangeNickname = async () => {
   } catch (error) {
     console.error('修改昵称失败:', error);
     changeNicknameError.value = '网络错误，请稍后重试';
+  }
+};
+
+// 设置入口点击处理
+const handleSettingsClick = () => {
+  showSettingsModal.value = true;
+  settingsTab.value = '';
+  fromAvatarClick.value = false;
+};
+
+// 头像点击处理（只显示更换头像功能）
+const handleAvatarClick = () => {
+  showSettingsModal.value = true;
+  settingsTab.value = 'avatar';
+  fromAvatarClick.value = true;
+  // 重置头像相关状态
+  showAvatarUpload.value = false;
+  showAvatarCrop.value = false;
+  newAvatarFile.value = null;
+  newAvatarPreview.value = null;
+  changeAvatarError.value = '';
+  changeAvatarSuccess.value = '';
+};
+
+// 关闭设置对话框
+const closeSettingsModal = () => {
+  showSettingsModal.value = false;
+  settingsTab.value = '';
+  fromAvatarClick.value = false;
+  // 重置所有状态
+  showAvatarUpload.value = false;
+  showAvatarCrop.value = false;
+  newAvatarFile.value = null;
+  newAvatarPreview.value = null;
+  changeAvatarError.value = '';
+  changeAvatarSuccess.value = '';
+};
+
+// 昵称点击处理
+const handleNicknameClick = () => {
+  settingsTab.value = 'nickname';
+  fromAvatarClick.value = false;
+  newNickname.value = userInfo.value?.nickname || '';
+  changeNicknameError.value = '';
+  changeNicknameSuccess.value = '';
+};
+
+// 个人签名点击处理
+const handleSignatureClick = () => {
+  settingsTab.value = 'signature';
+  fromAvatarClick.value = false;
+  newSignature.value = userInfo.value?.signature || '';
+  changeSignatureError.value = '';
+  changeSignatureSuccess.value = '';
+};
+
+// 修改密码点击处理
+const handlePasswordClick = () => {
+  fromAvatarClick.value = false;
+  handlePasswordTabClick();
+};
+
+// 更换二级问题点击处理
+const handleSecurityClick = () => {
+  fromAvatarClick.value = false;
+  handleSecurityTabClick();
+};
+
+// 注销账号点击处理
+const handleDeleteAccountClick = () => {
+  showDeleteAccountConfirm.value = true;
+  deleteAccountPassword.value = '';
+  deleteAccountError.value = '';
+};
+
+// 修改个人签名
+const handleChangeSignature = async () => {
+  changeSignatureError.value = '';
+  changeSignatureSuccess.value = '';
+  
+  if (newSignature.value.length > 500) {
+    changeSignatureError.value = '个人签名长度不能超过500个字符';
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/auth/update-signature', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': userInfo.value.id.toString()
+      },
+      body: JSON.stringify({
+        signature: newSignature.value.trim()
+      })
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      changeSignatureSuccess.value = '个人签名修改成功';
+      // 更新用户信息
+      if (result.user_info) {
+        userInfo.value.signature = result.user_info.signature;
+        localStorage.setItem('userInfo', JSON.stringify(userInfo.value));
+      } else {
+        userInfo.value.signature = newSignature.value.trim();
+        localStorage.setItem('userInfo', JSON.stringify(userInfo.value));
+      }
+      // 2秒后返回设置列表
+      setTimeout(() => {
+        changeSignatureSuccess.value = '';
+        settingsTab.value = '';
+      }, 2000);
+    } else {
+      changeSignatureError.value = result.message || '修改个人签名失败';
+    }
+  } catch (error) {
+    console.error('修改个人签名失败:', error);
+    changeSignatureError.value = '网络错误，请稍后重试';
+  }
+};
+
+// 确认注销账号
+const handleConfirmDeleteAccount = async () => {
+  deleteAccountError.value = '';
+  
+  if (!deleteAccountPassword.value) {
+    deleteAccountError.value = '请输入密码确认';
+    return;
+  }
+  
+  if (!confirm('确定要注销账号吗？此操作不可恢复，将删除您的所有数据！')) {
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/auth/delete-account', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': userInfo.value.id.toString()
+      },
+      body: JSON.stringify({
+        password: deleteAccountPassword.value
+      })
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      alert('账号已注销');
+      // 退出登录
+      userInfo.value = null;
+      localStorage.removeItem('userInfo');
+      showSettingsModal.value = false;
+      router.push('/login');
+    } else {
+      deleteAccountError.value = result.message || '注销账号失败';
+    }
+  } catch (error) {
+    console.error('注销账号失败:', error);
+    deleteAccountError.value = '网络错误，请稍后重试';
   }
 };
 
@@ -1008,6 +1334,13 @@ body { margin: 0; font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; bac
   object-fit: cover;
 }
 
+.user-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
 .user-nickname {
   font-size: 12px;
   color: #666;
@@ -1017,6 +1350,17 @@ body { margin: 0; font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; bac
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.user-account {
+  font-size: 10px;
+  color: #999;
+  text-align: center;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
 }
 
 /* 设置菜单 */
@@ -1220,6 +1564,146 @@ main {
 .settings-modal {
   width: 500px;
   max-width: 90%;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+  background: #fff;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 16px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.close-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  font-size: 24px;
+  color: #909399;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s;
+  line-height: 1;
+  padding: 0;
+}
+
+.close-btn:hover {
+  background: #f5f7fa;
+  color: #606266;
+}
+
+/* 设置列表样式（美化后） */
+.settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: #fff;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #e4e7ed;
+}
+
+.settings-item {
+  padding: 16px 20px;
+  border-bottom: 1px solid #f0f2f5;
+  transition: all 0.3s;
+  background: #fff;
+}
+
+.settings-item:last-child {
+  border-bottom: none;
+}
+
+.settings-item.clickable {
+  cursor: pointer;
+}
+
+.settings-item.clickable:hover {
+  background: #f5f7fa;
+}
+
+.settings-item.readonly {
+  cursor: default;
+  background: #fafafa;
+}
+
+.settings-item-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-item-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-item-label {
+  font-size: 15px;
+  color: #303133;
+  font-weight: 500;
+}
+
+.settings-item-sub {
+  font-size: 13px;
+  color: #909399;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 0;
+}
+
+.settings-item-value {
+  font-size: 14px;
+  color: #606266;
+  font-weight: 400;
+}
+
+.settings-item-arrow {
+  font-size: 20px;
+  color: #c0c4cc;
+  font-weight: 300;
+  transition: all 0.3s;
+}
+
+.settings-item.clickable:hover .settings-item-arrow {
+  color: #409eff;
+  transform: translateX(2px);
+}
+
+.settings-item.logout-item,
+.settings-item.delete-item {
+  margin-top: 8px;
+  border-top: 1px solid #e4e7ed;
+  border-radius: 0 0 8px 8px;
+}
+
+.settings-item.logout-item .settings-item-label,
+.settings-item.delete-item .settings-item-label {
+  color: #f56c6c;
+  font-weight: 500;
+}
+
+.settings-item.logout-item:hover,
+.settings-item.delete-item:hover {
+  background: #fef0f0;
 }
 
 .settings-tabs {
