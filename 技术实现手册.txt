@@ -2,7 +2,7 @@
 公共文化资源管理系统 - 技术实现手册
 ================================================================================
 
-版本：1.0
+版本：1.1
 更新日期：2025年12月17日
 
 ================================================================================
@@ -186,6 +186,18 @@ users (1) ──< (N) qa_sessions
 qa_sessions (1) ──< (N) qa_messages
 users (1) ──< (N) user_access_logs
 
+用户表字段说明
+
+users表包含以下关键字段：
+- `account`: 用户账号（8-10位数字，系统自动生成，永久不可修改）
+- `password_hash`: 密码哈希值（SHA-256）
+- `role`: 用户角色（'普通用户' 或 '管理员'）
+- `nickname`: 用户昵称（可选，可修改，最多100字符）
+- `signature`: 个人签名（可选，可修改，最多500字符）
+- `avatar_path`: 头像路径（默认：'/default.jpg'）
+- `security_question`: 自定义安全问题（用于找回密码）
+- `security_answer_hash`: 安全问题答案哈希值（SHA-256）
+
 ================================================================================
 
 核心功能实现
@@ -280,6 +292,62 @@ RAG检索增强生成
 - 通过`resource_id`查询某个文字资源的所有图片
 - 通过`entity_id`查询某个文化实体的所有图片
 
+5. 前端设置页面系统
+
+设置页面采用列表式布局（类似QQ设置），包含以下功能：
+
+账号显示：
+- 仅显示，不可修改
+- 显示用户的8-10位数字账号
+
+昵称管理：
+- 可点击进入修改界面
+- 下方显示当前昵称
+- 支持最多100个字符
+- API: POST /api/auth/update-nickname
+
+个人签名管理：
+- 可点击进入设置界面
+- 下方显示当前签名（未设置时显示"未设置"）
+- 支持最多500个字符
+- 使用textarea输入框，支持多行文本
+- 显示字符计数（已输入/500）
+- API: POST /api/auth/update-signature
+
+密码管理：
+- 可点击进入修改界面
+- 支持两种验证方式：
+  - 原密码验证
+  - 二级密码验证（如果已设置安全问题）
+- API: POST /api/auth/change-password
+
+二级问题管理：
+- 可点击进入设置界面
+- 如果已设置，需要先验证原答案
+- 支持设置新问题和新答案
+- API: POST /api/auth/change-security-question
+
+头像管理：
+- 方式一：通过设置列表进入
+- 方式二：直接点击页面右上角的用户头像
+- 支持上传新头像（自动裁剪到200x200像素）
+- 支持使用默认头像
+- API: POST /api/auth/change-avatar
+
+账号注销：
+- 位于设置列表最底部
+- 红色文字，表示危险操作
+- 需要输入密码确认
+- 注销后账号永久删除，无法恢复
+- API: POST /api/auth/delete-account
+
+技术实现：
+- 使用Vue 3 Composition API
+- 使用ref管理状态（settingsTab, fromAvatarClick等）
+- 条件渲染显示不同的设置面板
+- 使用localStorage保存用户信息
+- 所有API调用都包含X-User-Id请求头
+
 ================================================================================
 
 API接口文档
@@ -327,6 +395,45 @@ POST /api/auth/update-nickname
 请求体：
 {
   "nickname": "新昵称"
+}
+
+响应：
+{
+  "success": true,
+  "message": "昵称修改成功",
+  "user_info": {
+    "id": 1,
+    "account": "123456789",
+    "nickname": "新昵称",
+    "signature": "个人签名",
+    "avatar_path": "/default.jpg",
+    "role": "普通用户"
+  }
+}
+
+POST /api/auth/update-signature
+修改个人签名
+
+请求头：
+- `X-User-Id`: 用户ID
+
+请求体：
+{
+  "signature": "个人签名内容（最多500字符）"
+}
+
+响应：
+{
+  "success": true,
+  "message": "个人签名修改成功",
+  "user_info": {
+    "id": 1,
+    "account": "123456789",
+    "nickname": "用户昵称",
+    "signature": "个人签名内容",
+    "avatar_path": "/default.jpg",
+    "role": "普通用户"
+  }
 }
 
 资源相关
