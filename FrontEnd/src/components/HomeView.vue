@@ -100,10 +100,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { ref, computed, onMounted, watch } from 'vue';
+import { useRouter, useRoute } from 'vue-router';
 
 const router = useRouter();
+const route = useRoute();
 
 // --- 轮播图数据 (保持不变) ---
 const mediaList = [
@@ -139,16 +140,20 @@ const isLoading = ref(false);
 const searchQuery = ref('');      // 搜索关键词
 
 // 1. 获取默认资源列表
-const fetchResources = async (page = 1) => {
+const fetchResources = async (page = null) => {
   if (isLoading.value) return;
   isLoading.value = true;
   
   try {
-    // 如果URL中有page参数，使用URL中的页码
-    const urlParams = new URLSearchParams(window.location.search);
-    const urlPage = urlParams.get('page');
-    if (urlPage && parseInt(urlPage) > 0) {
-      page = parseInt(urlPage);
+    // 如果没有传入page参数，才从URL中读取
+    if (page === null) {
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlPage = urlParams.get('page');
+      if (urlPage && parseInt(urlPage) > 0) {
+        page = parseInt(urlPage);
+      } else {
+        page = 1;
+      }
     }
     
     const response = await fetch(`/api/home/resources?page=${page}&page_size=8`);
@@ -166,15 +171,21 @@ const fetchResources = async (page = 1) => {
       totalPages.value = data.pagination?.total_pages || 1;
       jumpPage.value = currentPage.value;
       
-      // 更新URL中的页码（不刷新页面）
+      // 更新URL中的页码（使用router.push，支持浏览器前进/后退）
       if (currentPage.value > 1) {
-        const newUrl = new URL(window.location.href);
-        newUrl.searchParams.set('page', currentPage.value.toString());
-        window.history.replaceState({}, '', newUrl);
+        router.push({ 
+          path: '/', 
+          query: { page: currentPage.value.toString() } 
+        }).catch(() => {
+          // 忽略导航重复的错误
+        });
       } else {
-        const newUrl = new URL(window.location.href);
-        newUrl.searchParams.delete('page');
-        window.history.replaceState({}, '', newUrl);
+        router.push({ 
+          path: '/', 
+          query: {} 
+        }).catch(() => {
+          // 忽略导航重复的错误
+        });
       }
       
       // 如果资源列表为空，输出提示
@@ -299,6 +310,16 @@ const handleImageError = (event) => {
   }
 };
 
+// 监听路由变化（处理浏览器前进/后退）
+watch(() => route.query.page, (newPage) => {
+  if (route.path === '/') {
+    const page = newPage ? parseInt(newPage) : 1;
+    if (page > 0 && page !== currentPage.value) {
+      fetchResources(page);
+    }
+  }
+}, { immediate: false });
+
 // 初始化
 onMounted(async () => {
   // 先检查后端服务是否可用
@@ -319,10 +340,8 @@ onMounted(async () => {
   }
   
   // 加载资源列表（检查URL中的page参数）
-  const urlParams = new URLSearchParams(window.location.search);
-  const urlPage = urlParams.get('page');
-  const initialPage = urlPage && parseInt(urlPage) > 0 ? parseInt(urlPage) : 1;
-  fetchResources(initialPage);
+  // 初始化时不传入page参数，让fetchResources从URL中读取
+  fetchResources();
 });
 </script>
 
