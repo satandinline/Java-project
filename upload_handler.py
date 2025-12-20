@@ -275,8 +275,27 @@ class ResourceUploader:
                     # 2. 解析资源内容
                     content_data = json.loads(task_info['content_feature_data'] or '{}')
                     content_text = content_data.get('content_preview', '')
+                    resource_type = task_info.get('resource_type', '')
                     
-                    if not content_text:
+                    # 对于图片资源，需要获取图片文件路径
+                    image_path = None
+                    if resource_type == '图像':
+                        stored_file_name = content_data.get('stored_file_name') or content_data.get('file_name', '')
+                        if stored_file_name:
+                            image_path = os.path.join(self.upload_dir, stored_file_name)
+                            if not os.path.exists(image_path):
+                                error_msg = f"图片文件不存在: {image_path}"
+                                print(f"[AI标注] 任务{task_id}: {error_msg}")
+                                self._update_task_status_on_error(conn, task_id, error_msg)
+                                return
+                        else:
+                            error_msg = "无法获取图片文件路径"
+                            print(f"[AI标注] 任务{task_id}: {error_msg}")
+                            self._update_task_status_on_error(conn, task_id, error_msg)
+                            return
+                    
+                    # 对于文本资源，检查是否有内容
+                    if resource_type == '文本' and not content_text:
                         error_msg = "无可标注内容"
                         print(f"[AI标注] 任务{task_id}: {error_msg}")
                         self._update_task_status_on_error(conn, task_id, error_msg)
@@ -310,32 +329,58 @@ class ResourceUploader:
                     conn = None
                     
                     # 4. 构建标注提示词
-                    annotation_prompt = f"""
-    请从以下文化资源内容中识别并提取所有文化实体。
+                    if resource_type == '图像':
+                        # 图片资源的标注提示词
+                        annotation_prompt = """
+请分析这张图片，识别并提取所有与文化相关的实体。
 
-    资源标题: {task_info['title']}
-    资源类型: {task_info['resource_type']}
+要求:
+1. 识别图片中出现的所有文化实体（人物、作品、事件、地点、其他）
+2. 为每个实体标注类型（人物/作品/事件/地点/其他）
+3. 评估识别的置信度（0-1之间）
+4. 描述图片中的文化元素和传统节日相关内容
 
-    内容:
-    {content_text}
+请以JSON格式返回，例如:
+{
+"entities": [
+    {"name": "春节", "type": "事件", "confidence": 0.95},
+    {"name": "王安石", "type": "人物", "confidence": 0.88}
+]
+}
+"""
+                    else:
+                        # 文本资源的标注提示词
+                        annotation_prompt = f"""
+请从以下文化资源内容中识别并提取所有文化实体。
 
-    要求:
-    1. 识别所有文化实体（人物、作品、事件、地点、其他）
-    2. 为每个实体标注类型（人物/作品/事件/地点/其他）
-    3. 评估识别的置信度（0-1之间）
+资源标题: {task_info['title']}
+资源类型: {task_info['resource_type']}
 
-    请以JSON格式返回，例如:
-    {{
-    "entities": [
-        {{"name": "春节", "type": "事件", "confidence": 0.95}},
-        {{"name": "王安石", "type": "人物", "confidence": 0.88}}
-    ]
-    }}
-    """
+内容:
+{content_text}
+
+要求:
+1. 识别所有文化实体（人物、作品、事件、地点、其他）
+2. 为每个实体标注类型（人物/作品/事件/地点/其他）
+3. 评估识别的置信度（0-1之间）
+
+请以JSON格式返回，例如:
+{{
+"entities": [
+    {{"name": "春节", "type": "事件", "confidence": 0.95}},
+    {{"name": "王安石", "type": "人物", "confidence": 0.88}}
+]
+}}
+"""
                     
                     # 5. 调用RAG系统
-                    print(f"[AI标注] 任务{task_id}: 开始AI标注...")
-                    result = rag_system.ask(annotation_prompt)
+                    print(f"[AI标注] 任务{task_id}: 开始AI标注（资源类型: {resource_type}）...")
+                    if resource_type == '图像' and image_path:
+                        # 对于图片，使用image_paths参数
+                        result = rag_system.ask(annotation_prompt, image_paths=[image_path])
+                    else:
+                        # 对于文本，只使用文本提示词
+                        result = rag_system.ask(annotation_prompt)
                     
                     # 6. 解析标注结果
                     answer = result.get('answer', '')
