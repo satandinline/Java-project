@@ -1688,7 +1688,8 @@ def get_home_resources():
                 # 1. 从crawled_images表获取图片资源，按节日分组，每个节日只取第一张图片
                 # 首先获取所有图片，按节日名称分组
                 cursor.execute("""
-                    SELECT id, file_name, storage_path, tags, dimensions, crawl_time
+                    SELECT id, file_name, storage_path, tags, dimensions, crawl_time, 
+                           resource_id, entity_id, festival_name
                     FROM crawled_images
                     ORDER BY crawl_time DESC
                 """)
@@ -1768,12 +1769,77 @@ def get_home_resources():
                 
                 # 构建资源列表
                 for img in paginated_images:
-                    # 从tags提取节日名称（先提取，用于后续查询）
-                    festival_name = None
+                    # 优先通过entity_id关联查询cultural_entities表（最准确的方式）
+                    entity_id = img.get('entity_id')
+                    resource_id = img.get('resource_id')
+                    festival_name = img.get('festival_name')
+                    
                     entity_name = ""
                     description = ""
                     
-                    if img.get('tags'):
+                    # 1. 优先通过entity_id直接关联查询（最准确）
+                    if entity_id:
+                        cursor.execute("""
+                            SELECT entity_name, description, entity_type, cultural_value
+                            FROM cultural_entities
+                            WHERE id = %s
+                            LIMIT 1
+                        """, (entity_id,))
+                        entity_info = cursor.fetchone()
+                        if entity_info:
+                            entity_name = entity_info.get('entity_name', '') or ''
+                            description = entity_info.get('description', '') or ''
+                            if description:
+                                description = description[:200]  # 首页显示较短描述
+                    
+                    # 2. 如果没有entity_id，尝试通过resource_id查询cultural_resources，再关联cultural_entities
+                    if not entity_name and resource_id:
+                        cursor.execute("""
+                            SELECT cr.id, cr.title, cr.content_feature_data
+                            FROM cultural_resources cr
+                            WHERE cr.id = %s
+                            LIMIT 1
+                        """, (resource_id,))
+                        resource_info = cursor.fetchone()
+                        if resource_info:
+                            # 从content_feature_data中提取信息
+                            try:
+                                content_data = json.loads(resource_info.get('content_feature_data', '{}') or '{}')
+                                if isinstance(content_data, dict):
+                                    title = content_data.get('title', '')
+                                    if title:
+                                        entity_name = title
+                                    # 从meta中获取festival_name
+                                    meta = content_data.get('meta', {})
+                                    if meta and not festival_name:
+                                        festival_name = meta.get('festival_names', [None])[0] if meta.get('festival_names') else None
+                            except:
+                                pass
+                            
+                            # 通过resource_id查找关联的entity_id
+                            cursor.execute("""
+                                SELECT ci.entity_id
+                                FROM crawled_images ci
+                                WHERE ci.resource_id = %s AND ci.entity_id IS NOT NULL
+                                LIMIT 1
+                            """, (resource_id,))
+                            entity_id_result = cursor.fetchone()
+                            if entity_id_result and entity_id_result.get('entity_id'):
+                                cursor.execute("""
+                                    SELECT entity_name, description
+                                    FROM cultural_entities
+                                    WHERE id = %s
+                                    LIMIT 1
+                                """, (entity_id_result['entity_id'],))
+                                entity_info = cursor.fetchone()
+                                if entity_info:
+                                    entity_name = entity_info.get('entity_name', '') or entity_name or ''
+                                    description = entity_info.get('description', '') or description or ''
+                                    if description:
+                                        description = description[:200]
+                    
+                    # 3. 如果还是没有，从tags提取节日名称和实体名称
+                    if not entity_name and img.get('tags'):
                         try:
                             tags_data = json.loads(img['tags']) if isinstance(img['tags'], str) else img['tags']
                             if isinstance(tags_data, list) and tags_data:
@@ -1781,65 +1847,44 @@ def get_home_resources():
                                     if isinstance(tag, str):
                                         match = re.search(r'([\u4e00-\u9fa5]+)', tag)
                                         if match:
-                                            festival_name = match.group(1)
-                                            entity_name = festival_name
+                                            festival_name = festival_name or match.group(1)
+                                            if not entity_name:
+                                                entity_name = match.group(1)
                                             break
                         except Exception as e:
                             print(f"解析tags失败: {e}")
                             pass
                     
-                    # 优先从cultural_entities表获取资源信息和描述
-                    if festival_name:
-                        cursor.execute("""
-                            SELECT entity_name, description, entity_type, cultural_value
-                            FROM cultural_entities
-                            WHERE entity_name LIKE %s
-                            LIMIT 1
-                        """, (f'%{festival_name}%',))
-                        entity_info = cursor.fetchone()
-                        if entity_info:
-                            entity_name = entity_info.get('entity_name', festival_name)
-                            description = entity_info.get('description', '') or ''
-                            if description:
-                                description = description[:200]  # 首页显示较短描述
-                    
-                    # 如果还没有描述，从tags提取
-                    if not description and img.get('tags'):
-                        try:
-                            tags_data = json.loads(img['tags']) if isinstance(img['tags'], str) else img['tags']
-                            if isinstance(tags_data, list) and tags_data:
-                                for tag in tags_data:
-                                    if isinstance(tag, str) and festival_name and festival_name in tag:
-                                        desc_match = re.search(r'([\u4e00-\u9fa5]+[^\u4e00-\u9fa5]*)', tag)
-                                        if desc_match:
-                                            description = desc_match.group(1).strip()[:200]
-                                        else:
-                                            description = tag[:200] if len(tag) > 200 else tag
-                                        break
-                        except Exception as e:
-                            print(f"解析tags失败: {e}")
-                            pass
+                    # 4. 如果还是没有，使用festival_name字段
+                    if not entity_name:
+                        entity_name = festival_name or ''
                     
                     # 构建图片URL
-                    storage_path = img.get('storage_path')
-                    file_name = img.get('file_name')
+                    storage_path = img.get('storage_path', '')
+                    file_name = img.get('file_name', '')
                     
-                    if storage_path:
-                        actual_file = os.path.basename(storage_path) if os.path.sep in storage_path else storage_path
-                    elif file_name:
-                        actual_file = file_name
+                    # 处理default.jpg的特殊情况
+                    if storage_path and 'default.jpg' in storage_path:
+                        # 如果是default.jpg，直接使用/default.jpg路径
+                        image_url = "/default.jpg"
+                    elif storage_path:
+                        # 如果是crawled_images路径，使用API路径
+                        if 'crawled_images' in storage_path:
+                            actual_file = os.path.basename(storage_path)
+                            image_url = f"/api/images/crawled/{actual_file}"
+                        else:
+                            # 其他路径，直接使用
+                            image_url = storage_path if storage_path.startswith('/') else f"/{storage_path}"
+                    elif file_name and file_name != 'default.jpg':
+                        # 如果有文件名且不是default.jpg，使用API路径
+                        image_url = f"/api/images/crawled/{file_name}"
                     else:
-                        actual_file = None
-                    
-                    # 确保所有资源都有图片URL（即使文件不存在，也使用API路径，由serve_crawled_image处理）
-                    if actual_file:
-                        image_url = f"/api/images/crawled/{actual_file}"
-                    else:
-                        # 如果没有文件名，使用default图片
+                        # 默认使用default图片
                         image_url = "/default.jpg"
                     
-                    if not entity_name and img.get('file_name'):
-                        entity_name = os.path.splitext(img['file_name'])[0]
+                    # 如果还是没有实体名称，使用文件名（去掉扩展名）
+                    if not entity_name and file_name and file_name != 'default.jpg':
+                        entity_name = os.path.splitext(file_name)[0]
                     
                     resources.append({
                         'id': f"img_{img['id']}",

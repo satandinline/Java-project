@@ -52,11 +52,9 @@ class MinzuFestivalsSpider:
         self.current_festival_image_count = 0  # 当前节日已保存的图片数量
         self.current_festival_name = None  # 当前节日的名称
         
-        # 数量限制
-        self.max_text_items = 20  # 最大文字数据条数
-        self.max_image_items = 20  # 最大图片数据条数
-        self.text_items_count = 0  # 已爬取的文字数据条数
-        self.image_items_count = 0  # 已爬取的图片数据条数
+        # 数量限制（统一限制资源数量，每个资源包含文字和图片）
+        self.max_resources = 20  # 最大资源数量（每个资源包含文字和图片）
+        self.resources_count = 0  # 已爬取的资源数量
         
         # 确保crawled_images文件夹存在
         os.makedirs(CRAWLED_IMAGES_DIR, exist_ok=True)
@@ -210,7 +208,8 @@ class MinzuFestivalsSpider:
     def _is_meaningful_image(self, image_path):
         """
         检测图片是否有意义（不是空白或纯色图片）
-        使用更合理的判断方式，避免误判正常图片
+        采用保守策略：只过滤明显无意义的图片（几乎全白、全黑、极小尺寸）
+        其他情况默认保留，避免误删正常图片
         返回True表示图片有意义，False表示应该过滤掉
         """
         try:
@@ -222,8 +221,9 @@ class MinzuFestivalsSpider:
                 # 获取图片尺寸
                 width, height = img.size
                 
-                # 过滤掉太小的图片（小于80x80，放宽限制）
-                if width < 80 or height < 80:
+                # 1. 过滤掉太小的图片（小于50x50，这是明显无意义的尺寸）
+                if width < 50 or height < 50:
+                    print(f"  过滤极小图片（尺寸: {width}x{height}）")
                     return False
                 
                 # 将图片转换为numpy数组进行分析
@@ -238,80 +238,45 @@ class MinzuFestivalsSpider:
                 mean_brightness = np.mean(gray)
                 std_brightness = np.std(gray)
                 
-                # 计算图片的方差
-                variance = np.var(gray)
-                
-                # 计算RGB三个通道的标准差
-                r_std = np.std(img_array[:, :, 0])
-                g_std = np.std(img_array[:, :, 1])
-                b_std = np.std(img_array[:, :, 2])
-                
-                # 计算图片的熵值（信息量）- 更准确的判断方式
-                # 使用灰度直方图计算熵
-                hist, _ = np.histogram(gray.flatten(), bins=256, range=(0, 256))
-                hist = hist[hist > 0]  # 移除0值
-                if len(hist) > 0:
-                    prob = hist / hist.sum()
-                    entropy = -np.sum(prob * np.log2(prob + 1e-10))
-                else:
-                    entropy = 0
-                
-                # 使用边缘检测来判断图片是否有内容
-                # 使用Sobel算子计算边缘强度
-                from scipy import ndimage
-                sobel_x = ndimage.sobel(gray, axis=1)
-                sobel_y = ndimage.sobel(gray, axis=0)
-                edge_magnitude = np.sqrt(sobel_x**2 + sobel_y**2)
-                edge_mean = np.mean(edge_magnitude)
-                
-                # 综合判断：使用多个指标，只有同时满足多个条件才过滤
-                # 1. 极端情况：几乎全白或全黑（非常严格的判断）
-                if mean_brightness > 248 and std_brightness < 3:
+                # 2. 只过滤极端情况：几乎全白（亮度>250且标准差极小，说明几乎没有任何变化）
+                # 这个判断非常严格，只有真正是纯白或接近纯白的图片才会被过滤
+                if mean_brightness > 250 and std_brightness < 1.5:
                     print(f"  过滤极端空白图片（亮度: {mean_brightness:.1f}, 标准差: {std_brightness:.1f}）")
                     return False
                 
-                if mean_brightness < 5 and std_brightness < 3:
+                # 3. 只过滤极端情况：几乎全黑（亮度<3且标准差极小）
+                if mean_brightness < 3 and std_brightness < 1.5:
                     print(f"  过滤极端纯黑图片（亮度: {mean_brightness:.1f}, 标准差: {std_brightness:.1f}）")
                     return False
                 
-                # 2. 信息量极低：熵值小于2（说明图片几乎没有信息）
-                if entropy < 2:
-                    print(f"  过滤低熵图片（熵值: {entropy:.2f}）")
-                    return False
+                # 4. 过滤单色图片：如果标准差极小（<0.5），说明图片几乎没有变化，可能是单色图
+                # 但需要结合亮度判断，避免误判深色或浅色的正常图片
+                if std_brightness < 0.5:
+                    # 如果标准差极小，且亮度在中间范围（不是极白或极黑），可能是单色背景图
+                    # 但为了保守起见，我们只过滤标准差接近0的情况
+                    if std_brightness < 0.1:
+                        print(f"  过滤单色图片（标准差: {std_brightness:.3f}）")
+                        return False
                 
-                # 3. 边缘检测：如果边缘强度极低，说明图片几乎没有内容
-                if edge_mean < 2:
-                    print(f"  过滤无边缘图片（边缘强度: {edge_mean:.2f}）")
-                    return False
-                
-                # 4. 综合判断：如果标准差、方差、RGB标准差都很低，且熵值也低，才过滤
-                # 放宽阈值，避免误判
-                if (std_brightness < 2 and variance < 20 and 
-                    r_std < 2 and g_std < 2 and b_std < 2 and entropy < 3):
-                    print(f"  过滤综合低质量图片（标准差: {std_brightness:.1f}, 方差: {variance:.1f}, 熵: {entropy:.2f}）")
-                    return False
-                
-                # 其他情况都认为是有意义的图片
+                # 其他所有情况都认为是有意义的图片，包括：
+                # - 颜色比较统一的图片（传统节日图片可能主色调统一，但仍有内容）
+                # - 低对比度的图片（可能是艺术风格）
+                # - 边缘不明显的图片（可能是柔和的图片）
+                # - 熵值较低的图片（可能是简洁的设计，但仍有意义）
                 return True
+                
         except ImportError:
-            # 如果没有scipy，使用简化判断
+            # 如果没有numpy，使用最基本的判断
             try:
-                import numpy as np
-                img_array = np.array(img)
-                gray = np.dot(img_array[...,:3], [0.299, 0.587, 0.114])
-                mean_brightness = np.mean(gray)
-                std_brightness = np.std(gray)
-                variance = np.var(gray)
-                
-                # 只过滤极端情况
-                if mean_brightness > 248 and std_brightness < 3:
-                    return False
-                if mean_brightness < 5 and std_brightness < 3:
-                    return False
-                if std_brightness < 2 and variance < 20:
-                    return False
-                return True
+                # 重新打开图片获取尺寸（因为img可能在with块外不可用）
+                with Image.open(image_path) as img:
+                    width, height = img.size
+                    if width < 50 or height < 50:
+                        return False
+                    # 没有numpy时，默认保留所有图片
+                    return True
             except:
+                # 如果连打开图片都失败，默认保留（避免误删）
                 return True
         except Exception as e:
             print(f"  图片质量检测失败: {e}")
@@ -400,9 +365,6 @@ class MinzuFestivalsSpider:
     
     def _save_default_image(self, resource_id, entity_id, festival_name):
         """为只有文字没有图片的资源保存default.jpg记录"""
-        if self.image_items_count >= self.max_image_items:
-            return False
-        
         try:
             # 获取default.jpg的尺寸信息
             dimensions = self._get_default_image_info()
@@ -423,7 +385,6 @@ class MinzuFestivalsSpider:
             """, (file_name, storage_path, dimensions, tags_json, resource_id, entity_id, festival_name))
             
             self.db_conn.commit()
-            self.image_items_count += 1
             print(f"已保存默认图片记录: default.jpg (resource_id: {resource_id}, entity_id: {entity_id}, festival_name: {festival_name or '未知'})")
             return True
         except Exception as e:
@@ -435,10 +396,6 @@ class MinzuFestivalsSpider:
         """
         保存图片信息到数据库，并关联到对应的文字资源
         """
-        # 检查是否达到图片数量限制
-        if self.image_items_count >= self.max_image_items:
-            return False
-        
         try:
             # 清洗tags
             cleaned_tags = self._clean_tags(tags) if tags else []
@@ -451,7 +408,6 @@ class MinzuFestivalsSpider:
             """, (file_name, storage_path, dimensions, tags_json, resource_id, entity_id, festival_name))
             
             self.db_conn.commit()
-            self.image_items_count += 1
             return True
         except Exception as e:
             print(f"保存到数据库失败: {e}")
@@ -585,10 +541,6 @@ class MinzuFestivalsSpider:
         content_text: 文本内容
         返回: (resource_id, entity_id, festival_name) 或 None
         """
-        # 检查是否达到文字数量限制
-        if self.text_items_count >= self.max_text_items:
-            return None
-        
         if not resource_title or not content_text:
             return None
         
@@ -664,7 +616,6 @@ class MinzuFestivalsSpider:
             entity_id = self.db_cursor.lastrowid
             
             self.db_conn.commit()
-            self.text_items_count += 1
             
             # 返回resource_id, entity_id, festival_name用于关联图片
             return (resource_id, entity_id, chinese_festival_name)
@@ -892,38 +843,75 @@ class MinzuFestivalsSpider:
         if url in self.visited_urls:
             return []
         
-        # 检查是否达到数量限制
-        if self.text_items_count >= self.max_text_items and self.image_items_count >= self.max_image_items:
-            print(f"已达到数量限制（文字: {self.text_items_count}/{self.max_text_items}, 图片: {self.image_items_count}/{self.max_image_items}），停止爬取")
+        # 检查是否达到资源数量限制
+        if self.resources_count >= self.max_resources:
+            print(f"已达到资源数量限制（{self.resources_count}/{self.max_resources}），停止爬取")
             return []
         
         self.visited_urls.add(url)
         print(f"正在爬取: {url}")
         
-        # 添加重试机制
-        max_retries = 3
-        retry_delay = 2  # 秒
+        # 添加重试机制，改进SSL错误处理
+        max_retries = 4  # 增加重试次数
+        retry_delay = 3  # 增加延迟时间到3秒
         html_content = None
+        ssl_verify_disabled = False  # 标记是否已禁用SSL验证
         
         for attempt in range(max_retries):
             try:
-                response = self.session.get(url, timeout=15, allow_redirects=True)
+                # 如果之前遇到SSL错误，禁用SSL验证
+                if ssl_verify_disabled:
+                    response = self.session.get(url, timeout=20, allow_redirects=True, verify=False)
+                else:
+                    response = self.session.get(url, timeout=20, allow_redirects=True)
+                
                 response.raise_for_status()
                 response.encoding = 'utf-8'
                 html_content = response.text
                 break  # 成功获取，退出重试循环
+                
             except requests.exceptions.SSLError as e:
-                print(f"  SSL错误（尝试 {attempt + 1}/{max_retries}）: {e}")
+                error_msg = str(e)
+                print(f"  SSL错误（尝试 {attempt + 1}/{max_retries}）: {error_msg[:100]}...")
+                
                 if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    # 尝试禁用SSL验证（仅作为最后手段）
-                    if attempt == max_retries - 2:
+                    # 第一次遇到SSL错误时，立即尝试禁用SSL验证
+                    if not ssl_verify_disabled:
                         import urllib3
                         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
                         self.session.verify = False
+                        ssl_verify_disabled = True
+                        print(f"  已禁用SSL验证，将在下次重试时使用")
+                    
+                    # 如果URL是HTTPS，尝试使用HTTP（仅对某些域名）
+                    if attempt == 1 and url.startswith('https://'):
+                        # 尝试将HTTPS改为HTTP（仅对允许的域名）
+                        http_url = url.replace('https://', 'http://')
+                        if any(domain in http_url for domain in ALLOWED_DOMAINS):
+                            print(f"  尝试使用HTTP替代HTTPS: {http_url}")
+                            url = http_url
+                            # 重置session的verify设置
+                            self.session.verify = True
+                            ssl_verify_disabled = False
+                    
+                    time.sleep(retry_delay)
                 else:
                     print(f"爬取页面失败 {url}: SSL连接失败，已重试{max_retries}次")
+                    # 最后一次尝试：如果还是HTTPS，尝试HTTP
+                    if url.startswith('https://'):
+                        http_url = url.replace('https://', 'http://')
+                        if any(domain in http_url for domain in ALLOWED_DOMAINS):
+                            print(f"  最后尝试使用HTTP: {http_url}")
+                            try:
+                                response = self.session.get(http_url, timeout=20, allow_redirects=True)
+                                response.raise_for_status()
+                                response.encoding = 'utf-8'
+                                html_content = response.text
+                                break  # 成功获取
+                            except:
+                                pass
                     return []
+                    
             except requests.exceptions.RequestException as e:
                 print(f"  请求错误（尝试 {attempt + 1}/{max_retries}）: {e}")
                 if attempt < max_retries - 1:
@@ -947,6 +935,10 @@ class MinzuFestivalsSpider:
                 resource_title = h1_tag.get_text().strip() if h1_tag else ''
             content_text = self._extract_text_content(html_content)
             
+            # 检查是否达到资源数量限制
+            if self.resources_count >= self.max_resources:
+                return []
+            
             # 先保存文字数据（即使没有图片也要保存，只要文本内容足够）
             # 先清洗文本内容
             cleaned_content = self._clean_text_content(content_text)
@@ -954,81 +946,77 @@ class MinzuFestivalsSpider:
             entity_id = None
             festival_name = None
             
-            if self.text_items_count < self.max_text_items and resource_title and cleaned_content and len(cleaned_content) > 50:
+            if resource_title and cleaned_content and len(cleaned_content) > 50:
                 tags = self._extract_tags(html_content, url)
                 result = self._save_text_to_database(resource_title, cleaned_content, url, tags)
                 if result:
                     resource_id, entity_id, festival_name = result
-                    print(f"已保存文字数据: {resource_title[:50]}... (文字数据: {self.text_items_count}/{self.max_text_items}, resource_id: {resource_id}, entity_id: {entity_id})")
+                    print(f"已保存文字数据: {resource_title[:50]}... (resource_id: {resource_id}, entity_id: {entity_id})")
             
-            # 提取图片（如果未达到限制）
+            # 提取图片（如果有文字资源，图片应该关联到该资源）
             images_saved = 0  # 记录实际保存的图片数量
-            if self.image_items_count < self.max_image_items:
-                images = self._extract_images_from_page(html_content, url)
+            images = self._extract_images_from_page(html_content, url)
+            
+            # 确定当前节日的名称（用于关联图片）
+            # 优先使用从文字数据中提取的节日名称，如果没有则从标题中提取
+            current_festival = festival_name
+            if not current_festival and resource_title:
+                # 从标题中提取节日名称
+                festival_names = self._extract_festival_names(resource_title)
+                if festival_names:
+                    current_festival = festival_names[0]
+            
+            # 如果是新节日，重置计数器
+            if current_festival != self.current_festival_name:
+                self.current_festival_name = current_festival
+                self.current_festival_base_index = 0  # 将在_get_next_image_name中设置
+                self.current_festival_image_count = 0
+            
+            # 先检查这个资源有多少张图片
+            valid_images_count = len(images)
+            
+            # 如果有多张图片（>=2），所有图片都使用 基准序号-序号 格式
+            # 如果只有一张图片，使用普通序号格式
+            use_grouped_naming = valid_images_count >= 2
+            
+            # 下载并保存图片
+            for img_info in images:
+                image_url = img_info['url']
+                # 如果有多张图片，所有图片都使用分组命名（包括第一张）
+                is_same_festival = use_grouped_naming and current_festival == self.current_festival_name
+                file_name = self._get_next_image_name(image_url, is_same_festival=is_same_festival)
+                file_path, dimensions = self._download_image(image_url, file_name)
                 
-                # 确定当前节日的名称（用于关联图片）
-                # 优先使用从文字数据中提取的节日名称，如果没有则从标题中提取
-                current_festival = festival_name
-                if not current_festival and resource_title:
-                    # 从标题中提取节日名称
-                    festival_names = self._extract_festival_names(resource_title)
-                    if festival_names:
-                        current_festival = festival_names[0]
-                
-                # 如果是新节日，重置计数器
-                if current_festival != self.current_festival_name:
-                    self.current_festival_name = current_festival
-                    self.current_festival_base_index = 0  # 将在_get_next_image_name中设置
-                    self.current_festival_image_count = 0
-                
-                # 先检查这个资源有多少张图片
-                valid_images_count = 0
-                for img_info in images:
-                    if self.image_items_count + valid_images_count >= self.max_image_items:
-                        break
-                    # 简单检查URL是否有效（不下载，只计数）
-                    if img_info.get('url'):
-                        valid_images_count += 1
-                
-                # 如果有多张图片（>=2），所有图片都使用 基准序号-序号 格式
-                # 如果只有一张图片，使用普通序号格式
-                use_grouped_naming = valid_images_count >= 2
-                
-                # 下载并保存图片
-                for img_info in images:
-                    if self.image_items_count >= self.max_image_items:
-                        break
+                if file_path:
+                    # 提取标签
+                    tags = self._extract_tags(html_content, url)
+                    if img_info.get('alt'):
+                        tags.append(img_info['alt'])
                     
-                    image_url = img_info['url']
-                    # 如果有多张图片，所有图片都使用分组命名（包括第一张）
-                    is_same_festival = use_grouped_naming and current_festival == self.current_festival_name
-                    file_name = self._get_next_image_name(image_url, is_same_festival=is_same_festival)
-                    file_path, dimensions = self._download_image(image_url, file_name)
+                    # 添加节日名称到tags中（如果存在）
+                    if current_festival:
+                        if current_festival not in tags:
+                            tags.insert(0, current_festival)  # 将节日名称放在最前面
                     
-                    if file_path:
-                        # 提取标签
-                        tags = self._extract_tags(html_content, url)
-                        if img_info.get('alt'):
-                            tags.append(img_info['alt'])
-                        
-                        # 添加节日名称到tags中（如果存在）
-                        if current_festival:
-                            if current_festival not in tags:
-                                tags.insert(0, current_festival)  # 将节日名称放在最前面
-                        
-                        # 保存到数据库，关联resource_id和entity_id
-                        storage_path = f"crawled_images/{file_name}"
-                        if self._save_to_database(file_name, storage_path, dimensions, tags, resource_id, entity_id, current_festival):
-                            images_saved += 1
-                            print(f"已保存图片: {file_name} (节日: {current_festival or '未知'}, 图片数据: {self.image_items_count}/{self.max_image_items}, resource_id: {resource_id}, entity_id: {entity_id})")
+                    # 保存到数据库，关联resource_id和entity_id
+                    storage_path = f"crawled_images/{file_name}"
+                    if self._save_to_database(file_name, storage_path, dimensions, tags, resource_id, entity_id, current_festival):
+                        images_saved += 1
+                        print(f"已保存图片: {file_name} (节日: {current_festival or '未知'}, resource_id: {resource_id}, entity_id: {entity_id})")
             
             # 如果保存了文字数据但没有保存任何图片，插入一条default.jpg记录
             if resource_id and entity_id and images_saved == 0:
-                self._save_default_image(resource_id, entity_id, festival_name)
+                if self._save_default_image(resource_id, entity_id, festival_name):
+                    images_saved = 1  # 标记为已保存（default.jpg也算保存了）
+            
+            # 如果成功保存了一个完整资源（文字+图片或default.jpg），增加资源计数
+            if resource_id and entity_id and images_saved > 0:
+                self.resources_count += 1
+                print(f"已保存完整资源 #{self.resources_count}/{self.max_resources}: {resource_title[:50]}...")
             
             # 提取链接，继续爬取（如果未达到限制）
             links = []
-            if self.text_items_count < self.max_text_items or self.image_items_count < self.max_image_items:
+            if self.resources_count < self.max_resources:
                 for a in soup.find_all('a', href=True):
                     href = a['href']
                     absolute_url = urljoin(url, href)
@@ -1047,15 +1035,15 @@ class MinzuFestivalsSpider:
     def run(self, max_pages=500):
         """运行爬虫"""
         print("开始爬取中国民族文化资源库...")
-        print(f"数量限制：文字数据 {self.max_text_items} 条，图片数据 {self.max_image_items} 条")
+        print(f"数量限制：最多 {self.max_resources} 个资源（每个资源包含文字和图片）")
         
         queue = list(START_URLS)
         pages_crawled = 0
         
         while queue and pages_crawled < max_pages:
-            # 检查是否达到数量限制
-            if self.text_items_count >= self.max_text_items and self.image_items_count >= self.max_image_items:
-                print(f"已达到数量限制，停止爬取")
+            # 检查是否达到资源数量限制
+            if self.resources_count >= self.max_resources:
+                print(f"已达到资源数量限制，停止爬取")
                 break
             
             url = queue.pop(0)
@@ -1070,8 +1058,7 @@ class MinzuFestivalsSpider:
             time.sleep(1)  # 延迟1秒，避免请求过快
         
         print(f"爬取完成，共爬取 {pages_crawled} 个页面")
-        print(f"文字数据: {self.text_items_count}/{self.max_text_items} 条")
-        print(f"图片数据: {self.image_items_count}/{self.max_image_items} 条")
+        print(f"资源数据: {self.resources_count}/{self.max_resources} 个资源")
     
     def close(self):
         """关闭数据库连接"""
