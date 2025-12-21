@@ -1,0 +1,36 @@
+server:
+  port: 8000
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: cultural-resources-backend
+  
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://127.0.0.1:3306/java_project?useUnicode=true&characterEncoding=utf8mb4&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: root
+    password: M17382930994c@
+  
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+logging:
+  level:
+    root: INFO
+    com.cultural: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+
+file:
+  upload:
+    path: ./uploads
+  public:
+    path: ./public
+  crawled-images:
+    path: ./crawled_images
+

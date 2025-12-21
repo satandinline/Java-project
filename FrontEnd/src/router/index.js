@@ -74,7 +74,8 @@ const router = createRouter({
 // 路由守卫：检查登录状态和权限
 router.beforeEach((to, from, next) => {
   console.log('路由守卫:', { from: from.path, to: to.path, requiresAuth: to.meta.requiresAuth });
-  const userInfoStr = localStorage.getItem('userInfo');
+  // 使用sessionStorage保存当前会话的登录状态，刷新页面后会自动清空，需要重新登录
+  const userInfoStr = sessionStorage.getItem('userInfo');
   let userInfo = null;
   
   if (userInfoStr) {
@@ -101,28 +102,12 @@ router.beforeEach((to, from, next) => {
       return;
     }
     
-    // 记录页面访问日志（包括管理员）
-    if (userInfo && userInfo.id) {
-      try {
-        fetch(`/api/admin/log-access`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            user_id: userInfo.id,
-            access_type: 'page_view',
-            access_path: to.path
-          })
-        }).catch(err => console.error('记录访问日志失败:', err));
-      } catch (e) {
-        console.error('记录访问日志异常:', e);
-      }
-    }
+    // 不再在路由守卫中记录访问日志，只在登录成功时记录一次
   } else {
-    // 如果访问登录页且已登录，跳转到首页
+    // 如果访问登录页且已登录（sessionStorage中有userInfo），跳转到首页
+    // 注意：sessionStorage在刷新后会清空，所以这里检查的是当前会话状态
     if (to.path === '/login' && userInfo) {
-      console.log('已登录，跳转到首页');
+      console.log('当前会话已登录，跳转到首页');
       next('/');
       return;
     }

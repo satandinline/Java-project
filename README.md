@@ -6,17 +6,29 @@
 
 ```
 Java-project/
-├── AIGC/                    # AIGC相关功能模块
-│   ├── RAG.py              # RAG检索增强生成系统
-│   ├── image_RAG.py        # 图像生成系统
-│   ├── aigc_api_server.py  # AIGC API服务器
-│   └── README_AIGC.md      # AIGC功能说明
-├── FrontEnd/               # 前端Vue.js应用
+├── backend/                # Java后端（Spring Boot）
+│   ├── src/main/java/com/cultural/  # Java源代码
+│   │   ├── config/        # 配置类（数据源、Web配置）
+│   │   ├── controller/    # REST API控制器
+│   │   ├── service/       # 业务逻辑服务层
+│   │   ├── dao/           # 数据访问层（JDBC）
+│   │   ├── entity/        # 实体类
+│   │   └── util/          # 工具类
+│   ├── src/main/resources/  # 配置文件
+│   │   └── application.yml  # Spring Boot配置
+│   ├── pom.xml            # Maven配置文件
+│   └── README.md          # 后端说明文档
+├── AIGC/                  # AIGC相关功能模块（Python，用于AI功能）
+│   ├── RAG.py             # RAG检索增强生成系统
+│   ├── image_RAG.py       # 图像生成系统
+│   ├── aigc_api_server.py # AIGC API服务器（保留用于AI功能）
+│   └── README_AIGC.md     # AIGC功能说明
+├── FrontEnd/              # 前端Vue.js应用
 │   ├── src/               # 源代码
-│   ├── public/            # 静态资源（包含default.jpg默认头像）
+│   ├── public/            # 静态资源
 │   ├── package.json       # 依赖配置
 │   └── README.md          # 前端说明
-├── spider/                # 爬虫模块
+├── spider/                # 爬虫模块（Python）
 │   ├── minzu_festivals_spider.py  # 民族文化资源库爬虫
 │   ├── wikipedia_spider.py        # 维基百科爬虫
 │   ├── run_spiders.py             # 爬虫运行脚本
@@ -27,15 +39,19 @@ Java-project/
 │   ├── erdiagram.md       # ER图（Mermaid格式）
 │   └── readme.md          # 数据库说明
 ├── uploads/               # 用户上传的资源文件存储目录
-├── db_connection.py       # 数据库连接管理（统一配置）
-├── login.py              # 用户登录认证系统
-├── upload_handler.py     # 用户上传处理
+├── public/                # 用户头像存储目录
+├── crawled_images/        # 爬虫抓取的图片存储目录
+├── db_connection.py       # 数据库连接管理（Python模块，爬虫使用）
+├── login.py               # 用户登录认证系统（Python，已迁移到Java）
+├── upload_handler.py      # 用户上传处理（Python，部分功能已迁移）
 ├── festival_name_utils.py # 节日名称转换工具
-├── entity_type_utils.py  # 实体类型工具
+├── entity_type_utils.py   # 实体类型工具
 ├── requirements.txt       # Python依赖列表
 ├── install_dependencies.py # 自动安装依赖脚本
 ├── start_dev.bat          # Windows启动脚本
 ├── start_dev.sh           # Linux/Mac启动脚本
+├── MIGRATION_GUIDE.md     # 后端迁移指南
+├── BACKEND_MIGRATION_SUMMARY.md  # 迁移总结
 └── README.md              # 本文件
 ```
 
@@ -92,9 +108,18 @@ Java-project/
 
 ### 环境要求
 
-- Python 3.7+
+**后端（Java）**：
+- Java 17 或更高版本
+- Maven 3.6 或更高版本
+
+**数据库**：
+- MySQL 5.7+ 或 MySQL 8.0+
+
+**前端**：
 - Node.js 16+
-- MySQL 5.7+
+
+**Python（用于爬虫和AIGC功能）**：
+- Python 3.7+
 
 ### 安装步骤
 
@@ -185,21 +210,39 @@ chmod +x start_dev.sh
 
 **方式二：分别启动**
 
+启动Java后端：
+```bash
+cd backend
+mvn spring-boot:run
+```
+
+或使用启动脚本：
+```bash
+# Windows
+cd backend
+start_backend.bat
+
+# Linux/Mac
+cd backend
+chmod +x start_backend.sh
+./start_backend.sh
+```
+
 启动前端：
 ```bash
 cd FrontEnd
 npm run dev
 ```
 
-启动后端：
+**注意**：如果需要使用AIGC功能（AI生成），还需要启动Python AIGC服务：
 ```bash
 python AIGC/aigc_api_server.py
 ```
 
 访问地址：
-- 前端：http://localhost:5173
 - 前端：http://localhost:5173（用户访问地址）
-- 后端API：http://localhost:8000（内部服务，通过前端代理访问）
+- Java后端API：http://localhost:8000（内部服务，通过前端代理访问）
+- Python AIGC服务：http://localhost:8001（如需要AI功能）
 
 ## 默认账户
 
@@ -224,7 +267,10 @@ python AIGC/aigc_api_server.py
 
 - [技术实现手册](技术实现手册.txt) - 系统架构、技术栈、API文档、代码规范
 - [用户使用手册](用户使用手册.txt) - 用户操作指南、功能说明、常见问题
-- [AIGC功能说明](AIGC/README_AIGC.md) - AIGC模块详细说明
+- [后端迁移指南](MIGRATION_GUIDE.md) - Python到Java后端迁移详细说明
+- [迁移总结](BACKEND_MIGRATION_SUMMARY.md) - 后端迁移工作总结
+- [Java后端说明](backend/README.md) - Java后端项目文档
+- [AIGC功能说明](AIGC/README_AIGC.md) - AIGC模块详细说明（Python）
 - [前端使用说明](FrontEnd/README.md) - 前端开发指南
 - [爬虫使用说明](spider/README.md) - 爬虫模块使用说明
 - [数据库结构说明](database_files/readme.md) - 数据库设计文档
@@ -233,14 +279,27 @@ python AIGC/aigc_api_server.py
 
 ## 技术栈
 
-- **后端**：Python, Flask, LangChain, PyMySQL
+- **后端（Java）**：Spring Boot 3.2.0, JDBC, Java 17
+  - 使用JDBC连接MySQL数据库（替代Python的PyMySQL）
+  - RESTful API服务
+  - MVC架构（Controller-Service-DAO）
+  
+- **后端（Python - 可选）**：Flask, LangChain, PyMySQL
+  - AIGC功能（AI生成）
+  - 爬虫功能
+
 - **前端**：Vue.js 3, Vite, Vue Router 4
-- **数据库**：MySQL
-- **AI模型**：
+
+- **数据库**：MySQL 5.7+ / MySQL 8.0+
+  - 使用JDBC连接（Java后端）
+  - 支持utf8mb4字符集
+
+- **AI模型**（需要Python服务）：
   - 文字AIGC：通义千问（Tongyi）
   - 图片AIGC：火山引擎Seedream（Huoshan）
   - 备选：OpenAI GPT
-- **向量数据库**：Chroma
+
+- **向量数据库**（AIGC功能使用）：Chroma
 
 ## 密码加密
 

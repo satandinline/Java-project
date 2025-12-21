@@ -151,9 +151,13 @@ const loadStatistics = async () => {
 
     if (data.success) {
       statistics.value = data.data;
+      console.log('统计数据加载成功:', statistics.value);
       // 等待DOM更新后绘制图表
       await nextTick();
-      drawTrendChart();
+      // 使用setTimeout确保DOM完全渲染
+      setTimeout(() => {
+        drawTrendChart();
+      }, 100);
     } else {
       error.value = data.message || '获取统计数据失败';
     }
@@ -165,31 +169,96 @@ const loadStatistics = async () => {
   }
 };
 
-// 绘制趋势图表
+// 绘制趋势图表（折线图）
 const drawTrendChart = () => {
   if (!statistics.value || !statistics.value.trend_data || !trendChart.value) {
+    console.log('图表绘制条件不满足:', {
+      hasStatistics: !!statistics.value,
+      hasTrendData: !!(statistics.value && statistics.value.trend_data),
+      hasCanvas: !!trendChart.value
+    });
     return;
   }
 
   const canvas = trendChart.value;
   const ctx = canvas.getContext('2d');
-  const trendData = statistics.value.trend_data;
+  let trendData = statistics.value.trend_data || [];
 
   // 设置画布尺寸
   const container = canvas.parentElement;
-  canvas.width = container.clientWidth;
+  if (!container) {
+    console.error('无法找到画布容器');
+    return;
+  }
+  canvas.width = container.clientWidth || 800;
   canvas.height = 300;
 
   // 清空画布
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  if (trendData.length === 0) {
+  // 如果数据为空，显示提示
+  if (!trendData || trendData.length === 0) {
     ctx.fillStyle = '#999';
     ctx.font = '16px Arial';
     ctx.textAlign = 'center';
     ctx.fillText('暂无数据', canvas.width / 2, canvas.height / 2);
     return;
   }
+
+  console.log('趋势数据:', trendData);
+
+  // 确保数据有7条，不足的用0值填充（后端应该已经补齐，但前端做双重保障）
+  const requiredDays = 7;
+  if (trendData.length < requiredDays) {
+    const today = new Date();
+    const completeData = [];
+    
+    // 从6天前到今天（共7天）
+    for (let i = requiredDays - 1; i >= 0; i--) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - i);
+      date.setHours(0, 0, 0, 0); // 设置为当天的0点
+      const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD格式
+      
+      // 查找是否有对应的数据（支持多种日期格式匹配）
+      const existingData = trendData.find(d => {
+        const dDate = d.date || '';
+        // 支持完全匹配或字符串开头匹配
+        if (typeof dDate === 'string') {
+          return dDate === dateStr || dDate.startsWith(dateStr) || dDate.includes(dateStr);
+        }
+        return false;
+      });
+      
+      if (existingData) {
+        // 确保日期格式统一
+        completeData.push({
+          ...existingData,
+          date: dateStr
+        });
+      } else {
+        // 填充0值数据
+        completeData.push({
+          date: dateStr,
+          daily_users: 0,
+          text_count: 0,
+          image_count: 0
+        });
+      }
+    }
+    
+    trendData = completeData;
+  } else {
+    // 如果数据超过7天，只取最近7天
+    trendData = trendData.slice(-requiredDays);
+  }
+  
+  // 确保数据按日期排序（从早到晚）
+  trendData.sort((a, b) => {
+    const dateA = new Date(a.date + 'T00:00:00');
+    const dateB = new Date(b.date + 'T00:00:00');
+    return dateA - dateB;
+  });
 
   // 计算最大值（用于缩放）
   const maxUsers = Math.max(...trendData.map(d => d.daily_users || 0), 1);
@@ -198,51 +267,148 @@ const drawTrendChart = () => {
     1
   );
 
-  const padding = 40;
-  const chartWidth = canvas.width - padding * 2;
-  const chartHeight = canvas.height - padding * 2;
-  const barWidth = chartWidth / trendData.length * 0.6;
-  const spacing = chartWidth / trendData.length * 0.4;
+  const padding = { top: 40, right: 40, bottom: 50, left: 50 };
+  const chartWidth = canvas.width - padding.left - padding.right;
+  const chartHeight = canvas.height - padding.top - padding.bottom;
 
   // 绘制坐标轴
   ctx.strokeStyle = '#ddd';
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(padding, padding);
-  ctx.lineTo(padding, canvas.height - padding);
-  ctx.lineTo(canvas.width - padding, canvas.height - padding);
+  ctx.moveTo(padding.left, padding.top);
+  ctx.lineTo(padding.left, canvas.height - padding.bottom);
+  ctx.lineTo(canvas.width - padding.right, canvas.height - padding.bottom);
   ctx.stroke();
 
-  // 绘制数据
+  // 计算X坐标点位置
+  const getX = (index) => {
+    if (trendData.length === 1) {
+      return padding.left + chartWidth / 2;
+    }
+    return padding.left + (index / (trendData.length - 1)) * chartWidth;
+  };
+
+  // 计算Y坐标点位置（使用人次）
+  const getYUsers = (value) => {
+    const ratio = value / maxUsers;
+    return canvas.height - padding.bottom - (ratio * chartHeight);
+  };
+
+  // 计算Y坐标点位置（AIGC次数，使用右侧Y轴）
+  const getYCount = (value) => {
+    const ratio = value / maxCount;
+    return canvas.height - padding.bottom - (ratio * chartHeight);
+  };
+
+  // 绘制使用人次折线
+  ctx.strokeStyle = '#409eff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
   trendData.forEach((item, index) => {
-    const x = padding + index * (barWidth + spacing) + spacing / 2;
-    const date = new Date(item.date);
-    const dateStr = `${date.getMonth() + 1}/${date.getDate()}`;
+    const x = getX(index);
+    const y = getYUsers(item.daily_users || 0);
+    if (index === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  });
+  ctx.stroke();
 
-    // 绘制使用人次柱状图
-    const usersHeight = (item.daily_users || 0) / maxUsers * chartHeight;
-    ctx.fillStyle = '#409eff';
-    ctx.fillRect(x, canvas.height - padding - usersHeight, barWidth, usersHeight);
-
-    // 绘制文字AIGC次数
-    const textHeight = (item.text_count || 0) / maxCount * chartHeight * 0.5;
-    ctx.fillStyle = '#67c23a';
-    ctx.fillRect(x, canvas.height - padding - usersHeight - textHeight, barWidth * 0.4, textHeight);
-
-    // 绘制图片AIGC次数
-    const imageHeight = (item.image_count || 0) / maxCount * chartHeight * 0.5;
-    ctx.fillStyle = '#e6a23c';
-    ctx.fillRect(x + barWidth * 0.4, canvas.height - padding - usersHeight - imageHeight, barWidth * 0.4, imageHeight);
-
-    // 绘制日期标签
-    ctx.fillStyle = '#666';
-    ctx.font = '12px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText(dateStr, x + barWidth / 2, canvas.height - padding + 20);
+  // 绘制使用人次数据点
+  ctx.fillStyle = '#409eff';
+  trendData.forEach((item, index) => {
+    const x = getX(index);
+    const y = getYUsers(item.daily_users || 0);
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.fill();
   });
 
+  // 绘制文字AIGC折线
+  ctx.strokeStyle = '#67c23a';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  trendData.forEach((item, index) => {
+    const x = getX(index);
+    const y = getYCount(item.text_count || 0);
+    if (index === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  });
+  ctx.stroke();
+
+  // 绘制文字AIGC数据点
+  ctx.fillStyle = '#67c23a';
+  trendData.forEach((item, index) => {
+    const x = getX(index);
+    const y = getYCount(item.text_count || 0);
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // 绘制图片AIGC折线
+  ctx.strokeStyle = '#e6a23c';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  trendData.forEach((item, index) => {
+    const x = getX(index);
+    const y = getYCount(item.image_count || 0);
+    if (index === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  });
+  ctx.stroke();
+
+  // 绘制图片AIGC数据点
+  ctx.fillStyle = '#e6a23c';
+  trendData.forEach((item, index) => {
+    const x = getX(index);
+    const y = getYCount(item.image_count || 0);
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // 绘制日期标签
+  ctx.fillStyle = '#666';
+  ctx.font = '12px Arial';
+  ctx.textAlign = 'center';
+  trendData.forEach((item, index) => {
+    const x = getX(index);
+    let dateStr = '';
+    
+    // 处理日期格式
+    if (item.date) {
+      const date = new Date(item.date + 'T00:00:00'); // 确保正确解析日期
+      if (!isNaN(date.getTime())) {
+        dateStr = `${date.getMonth() + 1}/${date.getDate()}`;
+      } else {
+        // 如果日期格式不对，尝试直接解析字符串
+        dateStr = item.date.substring(5).replace('-', '/'); // 从YYYY-MM-DD提取MM/DD
+      }
+    }
+    
+    ctx.fillText(dateStr, x, canvas.height - padding.bottom + 20);
+  });
+
+  // 绘制Y轴刻度（使用人次）
+  ctx.fillStyle = '#666';
+  ctx.font = '10px Arial';
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 5; i++) {
+    const value = Math.round((maxUsers / 5) * i);
+    const y = canvas.height - padding.bottom - (i / 5) * chartHeight;
+    ctx.fillText(value.toString(), padding.left - 10, y + 4);
+  }
+
   // 绘制图例
-  const legendY = 20;
+  const legendY = 15;
   const legendItems = [
     { color: '#409eff', label: '使用人次' },
     { color: '#67c23a', label: '文字AIGC' },
@@ -250,13 +416,19 @@ const drawTrendChart = () => {
   ];
 
   legendItems.forEach((item, index) => {
-    const x = padding + index * 100;
+    const x = padding.left + index * 100;
     ctx.fillStyle = item.color;
-    ctx.fillRect(x, legendY, 15, 15);
+    ctx.beginPath();
+    ctx.moveTo(x, legendY);
+    ctx.lineTo(x + 20, legendY);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x + 10, legendY, 3, 0, Math.PI * 2);
+    ctx.fill();
     ctx.fillStyle = '#333';
     ctx.font = '12px Arial';
     ctx.textAlign = 'left';
-    ctx.fillText(item.label, x + 20, legendY + 12);
+    ctx.fillText(item.label, x + 25, legendY + 4);
   });
 };
 
@@ -434,11 +606,13 @@ onMounted(() => {
 .chart-container {
   width: 100%;
   height: 300px;
+  position: relative;
 }
 
 #trendChart {
   width: 100%;
   height: 100%;
+  display: block;
 }
 </style>
 

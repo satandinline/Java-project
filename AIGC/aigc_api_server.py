@@ -4078,7 +4078,7 @@ def get_dashboard_statistics():
                 if user_info.get('role') != '管理员':
                     return jsonify({'success': False, 'message': '权限不足，仅管理员可访问'}), 403
                 
-                from datetime import datetime, timedelta
+                from datetime import datetime, timedelta, date
                 import pytz
                 
                 # 获取当前时间（中国时区）
@@ -4086,224 +4086,237 @@ def get_dashboard_statistics():
                 now = datetime.now(tz)
                 today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 
-                # 1. 历史总访问人次（从user_access_logs表统计，包括管理员）
+                # 1. 历史总访问人次（从user_access_logs表统计，每次进入网页就算一次访问）
                 cursor.execute("""
-                    SELECT COUNT(DISTINCT user_id) as total_users
+                    SELECT COUNT(*) as total_users
                     FROM user_access_logs
                     WHERE access_type = 'page_view'
                 """)
                 result = cursor.fetchone()
                 total_users = result.get('total_users', 0) if result else 0
                 
-                # 如果user_access_logs表为空，回退到qa_sessions表统计
+                # 如果user_access_logs表为空，回退到qa_sessions表统计（统计会话数）
                 if total_users == 0:
                     cursor.execute("""
-                        SELECT COUNT(DISTINCT user_id) as total_users
+                        SELECT COUNT(*) as total_users
                         FROM qa_sessions
                     """)
                     result = cursor.fetchone()
                     total_users = result.get('total_users', 0) if result else 0
                 
-                # 2. 今日访问人次（从user_access_logs表统计，包括管理员）
+                # 2. 今日访问人次（从user_access_logs表统计，每次进入网页就算一次访问）
                 cursor.execute("""
-                    SELECT COUNT(DISTINCT user_id) as today_users
+                    SELECT COUNT(*) as today_users
                     FROM user_access_logs
                     WHERE access_type = 'page_view' AND access_time >= %s
                 """, (today_start,))
                 result = cursor.fetchone()
                 today_users = result.get('today_users', 0) if result else 0
                 
-                # 如果user_access_logs表为空，回退到qa_sessions表统计
+                # 如果user_access_logs表为空，回退到qa_sessions表统计（统计今日会话数）
                 if today_users == 0:
                     cursor.execute("""
-                        SELECT COUNT(DISTINCT user_id) as today_users
+                        SELECT COUNT(*) as today_users
                         FROM qa_sessions
                         WHERE created_at >= %s
                     """, (today_start,))
                     result = cursor.fetchone()
                     today_users = result.get('today_users', 0) if result else 0
                 
-                # 3. 历史文字AIGC使用人次（从user_access_logs表统计，包括管理员）
+                # 3. 历史文字AIGC使用人次（每次和AI对话就算一次，从user_access_logs表统计）
                 cursor.execute("""
-                    SELECT COUNT(DISTINCT user_id) as total_text_users
+                    SELECT COUNT(*) as total_text_users
                     FROM user_access_logs
                     WHERE access_type = 'aigc_text'
                 """)
                 result = cursor.fetchone()
                 total_text_users = result.get('total_text_users', 0) if result else 0
                 
-                # 如果user_access_logs表为空，回退到qa_messages表统计
+                # 如果user_access_logs表为空，回退到qa_messages表统计（统计用户消息数）
                 if total_text_users == 0:
                     cursor.execute("""
-                        SELECT COUNT(DISTINCT user_id) as total_text_users
+                        SELECT COUNT(*) as total_text_users
                         FROM qa_messages
-                        WHERE model = 'text'
+                        WHERE model = 'text' AND user_message IS NOT NULL AND user_message != ''
                     """)
                     result = cursor.fetchone()
                     total_text_users = result.get('total_text_users', 0) if result else 0
                 
-                # 4. 今日文字AIGC使用人次（从user_access_logs表统计，包括管理员）
+                # 4. 今日文字AIGC使用人次（每次和AI对话就算一次，从user_access_logs表统计）
                 cursor.execute("""
-                    SELECT COUNT(DISTINCT user_id) as today_text_users
+                    SELECT COUNT(*) as today_text_users
                     FROM user_access_logs
                     WHERE access_type = 'aigc_text' AND access_time >= %s
                 """, (today_start,))
                 result = cursor.fetchone()
                 today_text_users = result.get('today_text_users', 0) if result else 0
                 
-                # 如果user_access_logs表为空，回退到qa_messages表统计
+                # 如果user_access_logs表为空，回退到qa_messages表统计（统计今日用户消息数）
                 if today_text_users == 0:
                     cursor.execute("""
-                        SELECT COUNT(DISTINCT user_id) as today_text_users
+                        SELECT COUNT(*) as today_text_users
                         FROM qa_messages
-                        WHERE model = 'text' AND create_time >= %s
+                        WHERE model = 'text' AND create_time >= %s AND user_message IS NOT NULL AND user_message != ''
                     """, (today_start,))
                     result = cursor.fetchone()
                     today_text_users = result.get('today_text_users', 0) if result else 0
                 
-                # 5. 历史图片AIGC使用人次（从user_access_logs表统计，包括管理员）
+                # 5. 历史图片AIGC使用人次（每次和AI对话就算一次，从user_access_logs表统计）
                 cursor.execute("""
-                    SELECT COUNT(DISTINCT user_id) as total_image_users
+                    SELECT COUNT(*) as total_image_users
                     FROM user_access_logs
                     WHERE access_type = 'aigc_image'
                 """)
                 result = cursor.fetchone()
                 total_image_users = result.get('total_image_users', 0) if result else 0
                 
-                # 如果user_access_logs表为空，回退到qa_messages表统计
+                # 如果user_access_logs表为空，回退到qa_messages表统计（统计用户消息数）
                 if total_image_users == 0:
                     cursor.execute("""
-                        SELECT COUNT(DISTINCT user_id) as total_image_users
+                        SELECT COUNT(*) as total_image_users
                         FROM qa_messages
-                        WHERE model = 'image'
+                        WHERE model = 'image' AND user_message IS NOT NULL AND user_message != ''
                     """)
                     result = cursor.fetchone()
                     total_image_users = result.get('total_image_users', 0) if result else 0
                 
-                # 6. 今日图片AIGC使用人次（从user_access_logs表统计，包括管理员）
+                # 6. 今日图片AIGC使用人次（每次和AI对话就算一次，从user_access_logs表统计）
                 cursor.execute("""
-                    SELECT COUNT(DISTINCT user_id) as today_image_users
+                    SELECT COUNT(*) as today_image_users
                     FROM user_access_logs
                     WHERE access_type = 'aigc_image' AND access_time >= %s
                 """, (today_start,))
                 result = cursor.fetchone()
                 today_image_users = result.get('today_image_users', 0) if result else 0
                 
-                # 如果user_access_logs表为空，回退到qa_messages表统计
+                # 如果user_access_logs表为空，回退到qa_messages表统计（统计今日用户消息数）
                 if today_image_users == 0:
                     cursor.execute("""
-                        SELECT COUNT(DISTINCT user_id) as today_image_users
+                        SELECT COUNT(*) as today_image_users
                         FROM qa_messages
-                        WHERE model = 'image' AND create_time >= %s
+                        WHERE model = 'image' AND create_time >= %s AND user_message IS NOT NULL AND user_message != ''
                     """, (today_start,))
                     result = cursor.fetchone()
                     today_image_users = result.get('today_image_users', 0) if result else 0
                 
-                # 7. 历史文字AIGC使用次数（从user_access_logs表统计，包括管理员）
+                # 7. 历史文字AIGC使用次数（一轮对话用户发了多少次需求就算多少次，统计qa_messages表中的用户消息数）
                 cursor.execute("""
                     SELECT COUNT(*) as total_text_count
-                    FROM user_access_logs
-                    WHERE access_type = 'aigc_text'
+                    FROM qa_messages
+                    WHERE model = 'text' AND user_message IS NOT NULL AND user_message != ''
                 """)
                 result = cursor.fetchone()
                 total_text_count = result.get('total_text_count', 0) if result else 0
                 
-                # 如果user_access_logs表为空，回退到qa_messages表统计
-                if total_text_count == 0:
-                    cursor.execute("""
-                        SELECT COUNT(*) as total_text_count
-                        FROM qa_messages
-                        WHERE model = 'text'
-                    """)
-                    result = cursor.fetchone()
-                    total_text_count = result.get('total_text_count', 0) if result else 0
-                
-                # 8. 今日文字AIGC使用次数（从user_access_logs表统计，包括管理员）
+                # 8. 今日文字AIGC使用次数（一轮对话用户发了多少次需求就算多少次，统计qa_messages表中的用户消息数）
                 cursor.execute("""
                     SELECT COUNT(*) as today_text_count
-                    FROM user_access_logs
-                    WHERE access_type = 'aigc_text' AND access_time >= %s
+                    FROM qa_messages
+                    WHERE model = 'text' AND create_time >= %s AND user_message IS NOT NULL AND user_message != ''
                 """, (today_start,))
                 result = cursor.fetchone()
                 today_text_count = result.get('today_text_count', 0) if result else 0
                 
-                # 如果user_access_logs表为空，回退到qa_messages表统计
-                if today_text_count == 0:
-                    cursor.execute("""
-                        SELECT COUNT(*) as today_text_count
-                        FROM qa_messages
-                        WHERE model = 'text' AND create_time >= %s
-                    """, (today_start,))
-                    result = cursor.fetchone()
-                    today_text_count = result.get('today_text_count', 0) if result else 0
-                
-                # 9. 历史图片AIGC使用次数（从user_access_logs表统计，包括管理员）
+                # 9. 历史图片AIGC使用次数（一轮对话用户发了多少次需求就算多少次，统计qa_messages表中的用户消息数）
                 cursor.execute("""
                     SELECT COUNT(*) as total_image_count
-                    FROM user_access_logs
-                    WHERE access_type = 'aigc_image'
+                    FROM qa_messages
+                    WHERE model = 'image' AND user_message IS NOT NULL AND user_message != ''
                 """)
                 result = cursor.fetchone()
                 total_image_count = result.get('total_image_count', 0) if result else 0
                 
-                # 如果user_access_logs表为空，回退到qa_messages表统计
-                if total_image_count == 0:
-                    cursor.execute("""
-                        SELECT COUNT(*) as total_image_count
-                        FROM qa_messages
-                        WHERE model = 'image'
-                    """)
-                    result = cursor.fetchone()
-                    total_image_count = result.get('total_image_count', 0) if result else 0
-                
-                # 10. 今日图片AIGC使用次数（从user_access_logs表统计，包括管理员）
+                # 10. 今日图片AIGC使用次数（一轮对话用户发了多少次需求就算多少次，统计qa_messages表中的用户消息数）
                 cursor.execute("""
                     SELECT COUNT(*) as today_image_count
-                    FROM user_access_logs
-                    WHERE access_type = 'aigc_image' AND access_time >= %s
+                    FROM qa_messages
+                    WHERE model = 'image' AND create_time >= %s AND user_message IS NOT NULL AND user_message != ''
                 """, (today_start,))
                 result = cursor.fetchone()
                 today_image_count = result.get('today_image_count', 0) if result else 0
                 
-                # 如果user_access_logs表为空，回退到qa_messages表统计
-                if today_image_count == 0:
-                    cursor.execute("""
-                        SELECT COUNT(*) as today_image_count
-                        FROM qa_messages
-                        WHERE model = 'image' AND create_time >= %s
-                    """, (today_start,))
-                    result = cursor.fetchone()
-                    today_image_count = result.get('today_image_count', 0) if result else 0
-                
-                # 11. 最近7天的使用趋势（按天统计，优先使用user_access_logs表）
+                # 11. 最近7天的使用趋势（按天统计）
                 seven_days_ago = today_start - timedelta(days=6)
+                
+                # 统计每日访问次数（每次进入网页就算一次）
                 cursor.execute("""
                     SELECT 
                         DATE(access_time) as date,
-                        COUNT(DISTINCT user_id) as daily_users,
-                        SUM(CASE WHEN access_type = 'aigc_text' THEN 1 ELSE 0 END) as text_count,
-                        SUM(CASE WHEN access_type = 'aigc_image' THEN 1 ELSE 0 END) as image_count
+                        COUNT(*) as daily_users
                     FROM user_access_logs
-                    WHERE access_time >= %s
+                    WHERE access_type = 'page_view' AND access_time >= %s
                     GROUP BY DATE(access_time)
                     ORDER BY date ASC
                 """, (seven_days_ago,))
-                trend_data = cursor.fetchall()
+                daily_visits_raw = cursor.fetchall()
+                daily_visits = {}
+                for row in daily_visits_raw:
+                    date_val = row['date']
+                    if isinstance(date_val, (datetime, date)):
+                        date_str = date_val.strftime('%Y-%m-%d') if isinstance(date_val, datetime) else str(date_val)
+                    else:
+                        date_str = str(date_val)
+                    daily_visits[date_str] = row['daily_users']
                 
-                # 如果user_access_logs表为空，回退到qa_messages表统计
-                if not trend_data:
-                    cursor.execute("""
-                        SELECT 
-                            DATE(create_time) as date,
-                            COUNT(DISTINCT user_id) as daily_users,
-                            SUM(CASE WHEN model = 'text' THEN 1 ELSE 0 END) as text_count,
-                            SUM(CASE WHEN model = 'image' THEN 1 ELSE 0 END) as image_count
-                        FROM qa_messages
-                        WHERE create_time >= %s
-                        GROUP BY DATE(create_time)
-                        ORDER BY date ASC
-                    """, (seven_days_ago,))
-                    trend_data = cursor.fetchall()
+                # 统计每日文字AIGC使用次数（用户消息数，一轮对话用户发了多少次需求就算多少次）
+                cursor.execute("""
+                    SELECT 
+                        DATE(create_time) as date,
+                        COUNT(*) as text_count
+                    FROM qa_messages
+                    WHERE model = 'text' AND create_time >= %s 
+                        AND user_message IS NOT NULL AND user_message != ''
+                    GROUP BY DATE(create_time)
+                    ORDER BY date ASC
+                """, (seven_days_ago,))
+                daily_text_raw = cursor.fetchall()
+                daily_text = {}
+                for row in daily_text_raw:
+                    date_val = row['date']
+                    if isinstance(date_val, (datetime, date)):
+                        date_str = date_val.strftime('%Y-%m-%d') if isinstance(date_val, datetime) else str(date_val)
+                    else:
+                        date_str = str(date_val)
+                    daily_text[date_str] = row['text_count']
+                
+                # 统计每日图片AIGC使用次数（用户消息数，一轮对话用户发了多少次需求就算多少次）
+                cursor.execute("""
+                    SELECT 
+                        DATE(create_time) as date,
+                        COUNT(*) as image_count
+                    FROM qa_messages
+                    WHERE model = 'image' AND create_time >= %s 
+                        AND user_message IS NOT NULL AND user_message != ''
+                    GROUP BY DATE(create_time)
+                    ORDER BY date ASC
+                """, (seven_days_ago,))
+                daily_image_raw = cursor.fetchall()
+                daily_image = {}
+                for row in daily_image_raw:
+                    date_val = row['date']
+                    if isinstance(date_val, (datetime, date)):
+                        date_str = date_val.strftime('%Y-%m-%d') if isinstance(date_val, datetime) else str(date_val)
+                    else:
+                        date_str = str(date_val)
+                    daily_image[date_str] = row['image_count']
+                
+                # 生成完整的7天数据（从6天前到今天）
+                complete_trend_data = []
+                for i in range(7):
+                    date_obj = (today_start - timedelta(days=6-i)).date()
+                    date_str = date_obj.strftime('%Y-%m-%d')
+                    
+                    # 获取该日期的数据，如果没有则使用0
+                    daily_users = daily_visits.get(date_str, 0)
+                    text_count = daily_text.get(date_str, 0)
+                    image_count = daily_image.get(date_str, 0)
+                    
+                    complete_trend_data.append({
+                        'date': date_str,
+                        'daily_users': daily_users,
+                        'text_count': text_count,
+                        'image_count': image_count
+                    })
                 
                 return jsonify({
                     'success': True,
@@ -4318,7 +4331,7 @@ def get_dashboard_statistics():
                         'today_text_count': today_text_count,
                         'total_image_count': total_image_count,
                         'today_image_count': today_image_count,
-                        'trend_data': trend_data
+                        'trend_data': complete_trend_data
                     }
                 })
         finally:

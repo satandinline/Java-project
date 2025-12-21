@@ -429,26 +429,36 @@ const changeSignatureSuccess = ref('');
 
 onMounted(() => {
   console.log('App.vue mounted');
-  const savedUser = localStorage.getItem('userInfo');
+  // 从sessionStorage读取用户信息（sessionStorage在刷新后会清空，需要重新登录）
+  const savedUser = sessionStorage.getItem('userInfo');
   if (savedUser) {
     try {
       const parsedUser = JSON.parse(savedUser);
       // 验证用户信息是否有效（检查必要字段）
       if (!parsedUser || !parsedUser.id || !parsedUser.account) {
-        console.log('localStorage中的用户信息无效，已清除');
-        localStorage.removeItem('userInfo');
+        console.log('sessionStorage中的用户信息无效，已清除');
+        sessionStorage.removeItem('userInfo');
         userInfo.value = null;
+        if (router.currentRoute.value.path !== '/login') {
+          router.push('/login');
+        }
         return;
       }
       userInfo.value = parsedUser;
       console.log('用户信息已加载:', userInfo.value);
     } catch (e) {
       console.error('解析用户信息失败:', e);
-      localStorage.removeItem('userInfo');
+      sessionStorage.removeItem('userInfo');
       userInfo.value = null;
+      if (router.currentRoute.value.path !== '/login') {
+        router.push('/login');
+      }
     }
   } else {
     console.log('未找到用户信息，需要登录');
+    if (router.currentRoute.value.path !== '/login') {
+      router.push('/login');
+    }
   }
 });
 
@@ -459,28 +469,29 @@ const isAdmin = computed(() => {
   return userInfo.value && userInfo.value.role === '管理员';
 });
 
-// 监听路由变化，更新用户信息
+// 监听路由变化
 router.afterEach(() => {
-  // 当路由变化时，重新从localStorage读取用户信息
-  const savedUser = localStorage.getItem('userInfo');
+  // 从sessionStorage读取用户信息
+  const savedUser = sessionStorage.getItem('userInfo');
   if (savedUser) {
     try {
       const parsedUser = JSON.parse(savedUser);
-      // 验证用户信息是否有效（检查必要字段）
-      if (!parsedUser || !parsedUser.id || !parsedUser.account) {
-        console.log('localStorage中的用户信息无效，已清除');
-        localStorage.removeItem('userInfo');
+      if (parsedUser && parsedUser.id && parsedUser.account) {
+        userInfo.value = parsedUser;
+      } else {
         userInfo.value = null;
-        return;
       }
-      userInfo.value = parsedUser;
     } catch (e) {
       console.error('解析用户信息失败:', e);
-      localStorage.removeItem('userInfo');
       userInfo.value = null;
     }
   } else {
     userInfo.value = null;
+  }
+  
+  // 如果用户信息不存在且不在登录页，跳转到登录页
+  if (!userInfo.value && router.currentRoute.value.path !== '/login') {
+    router.push('/login');
   }
 });
 
@@ -497,7 +508,8 @@ const handleLoginSuccess = (userData) => {
     if (!userInfo.value.avatar_path || userInfo.value.avatar_path === './default.jpg') {
       userInfo.value.avatar_path = '/default.jpg';
     }
-    localStorage.setItem('userInfo', JSON.stringify(userInfo.value));
+    // 保存到sessionStorage（Login.vue中已经保存，这里再次确认）
+    sessionStorage.setItem('userInfo', JSON.stringify(userInfo.value));
     router.push('/');
   }
 };
@@ -1257,7 +1269,7 @@ const handleLogout = (skipConfirm = false) => {
   // 退出登录
   if (skipConfirm || confirm('确定要退出登录吗？')) {
     userInfo.value = null;
-    localStorage.removeItem('userInfo');
+    sessionStorage.removeItem('userInfo');
     showSettingsModal.value = false;
     router.push('/login');
   }

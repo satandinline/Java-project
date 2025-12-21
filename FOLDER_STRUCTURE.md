@@ -153,10 +153,77 @@
 
 ---
 
+## Java后端文件夹
+
+### `backend/` - Java后端项目
+
+**用途**：Java Spring Boot后端服务
+
+**项目结构**：
+```
+backend/
+├── src/main/java/com/cultural/
+│   ├── config/              # 配置类
+│   │   ├── DataSourceConfig.java    # JDBC数据源配置
+│   │   └── WebConfig.java           # Web配置（CORS、静态资源）
+│   ├── controller/          # REST API控制器
+│   │   ├── AuthController.java      # 认证API
+│   │   ├── HealthController.java    # 健康检查
+│   │   ├── ResourceController.java  # 资源API
+│   │   ├── StatisticsController.java # 统计API
+│   │   └── UploadController.java    # 上传API
+│   ├── service/             # 业务逻辑层
+│   │   ├── AuthService.java
+│   │   ├── ResourceService.java
+│   │   └── StatisticsService.java
+│   ├── dao/                 # 数据访问层（使用JDBC）
+│   │   ├── UserDao.java
+│   │   └── CulturalResourceDao.java
+│   ├── entity/              # 实体类
+│   │   ├── User.java
+│   │   └── CulturalResource.java
+│   ├── util/                # 工具类
+│   │   ├── PasswordUtil.java
+│   │   └── AccountUtil.java
+│   └── CulturalResourcesApplication.java  # 主启动类
+├── src/main/resources/
+│   └── application.yml      # Spring Boot配置文件
+├── pom.xml                  # Maven配置文件
+├── start_backend.bat        # Windows启动脚本
+├── start_backend.sh         # Linux/Mac启动脚本
+└── README.md                # 后端项目说明文档
+```
+
+**说明**：
+- 使用Spring Boot 3.2.0框架
+- 使用JDBC连接MySQL数据库（替代Python的PyMySQL）
+- 采用标准的MVC架构
+- 端口：8000
+
+**启动方式**：
+```bash
+cd backend
+mvn spring-boot:run
+```
+
+或使用启动脚本：
+```bash
+# Windows
+cd backend
+start_backend.bat
+
+# Linux/Mac
+cd backend
+./start_backend.sh
+```
+
+---
+
 ## 文件夹使用总结
 
 | 文件夹 | 用途 | 状态 | 存储内容 |
 |--------|------|------|----------|
+| `backend/` | Java后端项目 | ✅ 使用中 | Spring Boot后端服务代码 |
 | `AIGC_graph/` | AIGC生成的图片 | ✅ 使用中 | 图片AIGC生成的图像 |
 | `crawled_images/` | 爬虫抓取的图片 | ✅ 使用中 | 爬虫抓取的文化资源图片 |
 | `public/`（项目根目录） | 用户头像存储 | ✅ 使用中 | 默认头像（default.jpg）、用户上传的头像 |

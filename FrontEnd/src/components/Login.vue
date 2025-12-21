@@ -235,7 +235,7 @@ const defaultAvatarUrl = '/default.jpg';
 
 // 响应式数据
 const account = ref('');  // 登录时使用的账号
-const password = ref('');
+const password = ref('');  // 密码
 const nickname = ref('');
 const avatarFile = ref(null);
 const avatarPreview = ref(null);
@@ -342,7 +342,7 @@ const handleLogin = async () => {
     const result = await response.json();
 
     if (result.success) {
-      // 保存用户信息到本地存储
+      // 准备用户信息，保存到sessionStorage（当前会话有效，刷新后会清空，需要重新登录）
       const userInfo = {
         id: result.user_info.id,
         account: result.user_info.account,
@@ -351,7 +351,26 @@ const handleLogin = async () => {
         avatar_path: result.user_info.avatar_path || '/default.jpg',
         role: result.user_info.role
       };
-      localStorage.setItem('userInfo', JSON.stringify(userInfo));
+
+      // 保存到sessionStorage，用于路由守卫检查（刷新后会清空，需要重新登录）
+      sessionStorage.setItem('userInfo', JSON.stringify(userInfo));
+
+      // 记录登录访问日志（只在登录成功时记录一次）
+      try {
+        await fetch('/api/admin/log-access', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            user_id: userInfo.id,
+            access_type: 'page_view',
+            access_path: '/'
+          })
+        }).catch(err => console.error('记录访问日志失败:', err));
+      } catch (e) {
+        console.error('记录访问日志异常:', e);
+      }
 
       // 通知 App.vue 切换页面
       emit('login-success', userInfo);
@@ -433,18 +452,38 @@ const handleRegister = async () => {
       const accountMessage = `注册成功！\n\n您的账号：${userInfo.account}\n\n⚠️ 重要提示：\n请务必记住或保存您的账号！\n账号是您登录的唯一凭证。\n\n点击"确定"后，账号信息也会显示在页面顶部。`;
       alert(accountMessage);
       
-      // 保存用户信息到本地存储
-      localStorage.setItem('userInfo', JSON.stringify({
+      // 准备用户信息，保存到sessionStorage（当前会话有效，刷新后会清空，需要重新登录）
+      const userInfoForApp = {
         id: userInfo.id,
         account: userInfo.account,
         nickname: userInfo.nickname || userInfo.account,
         signature: userInfo.signature || null,
         avatar_path: userInfo.avatar_path || '/default.jpg',
         role: userInfo.role
-      }));
+      };
+
+      // 保存到sessionStorage，用于路由守卫检查（刷新后会清空，需要重新登录）
+      sessionStorage.setItem('userInfo', JSON.stringify(userInfoForApp));
+
+      // 记录注册后首次登录访问日志
+      try {
+        await fetch('/api/admin/log-access', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            user_id: userInfoForApp.id,
+            access_type: 'page_view',
+            access_path: '/'
+          })
+        }).catch(err => console.error('记录访问日志失败:', err));
+      } catch (e) {
+        console.error('记录访问日志异常:', e);
+      }
       
       // 通知 App.vue 切换页面
-      emit('login-success', userInfo);
+      emit('login-success', userInfoForApp);
       
       // 延迟跳转，让用户看到成功消息
       setTimeout(() => {
