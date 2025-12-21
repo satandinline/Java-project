@@ -41,17 +41,15 @@ Java-project/
 ├── uploads/               # 用户上传的资源文件存储目录
 ├── public/                # 用户头像存储目录
 ├── crawled_images/        # 爬虫抓取的图片存储目录
-├── db_connection.py       # 数据库连接管理（Python模块，爬虫使用）
-├── login.py               # 用户登录认证系统（Python，已迁移到Java）
-├── upload_handler.py      # 用户上传处理（Python，部分功能已迁移）
+├── db_connection.py       # 数据库连接管理（Python模块，爬虫和AIGC使用）
+├── login.py               # 用户登录认证系统（Python，AIGC模块使用，已迁移到Java但AIGC仍依赖）
+├── upload_handler.py      # 用户上传处理（Python，AIGC模块使用）
 ├── festival_name_utils.py # 节日名称转换工具
 ├── entity_type_utils.py   # 实体类型工具
 ├── requirements.txt       # Python依赖列表
 ├── install_dependencies.py # 自动安装依赖脚本
 ├── start_dev.bat          # Windows启动脚本
 ├── start_dev.sh           # Linux/Mac启动脚本
-├── MIGRATION_GUIDE.md     # 后端迁移指南
-├── BACKEND_MIGRATION_SUMMARY.md  # 迁移总结
 └── README.md              # 本文件
 ```
 
@@ -109,7 +107,7 @@ Java-project/
 ### 环境要求
 
 **后端（Java）**：
-- Java 17 或更高版本
+- Java：最新LTS版本（推荐Java 17或21）
 - Maven 3.6 或更高版本
 
 **数据库**：
@@ -267,22 +265,20 @@ python AIGC/aigc_api_server.py
 
 - [技术实现手册](技术实现手册.txt) - 系统架构、技术栈、API文档、代码规范
 - [用户使用手册](用户使用手册.txt) - 用户操作指南、功能说明、常见问题
-- [后端迁移指南](MIGRATION_GUIDE.md) - Python到Java后端迁移详细说明
-- [迁移总结](BACKEND_MIGRATION_SUMMARY.md) - 后端迁移工作总结
 - [Java后端说明](backend/README.md) - Java后端项目文档
 - [AIGC功能说明](AIGC/README_AIGC.md) - AIGC模块详细说明（Python）
 - [前端使用说明](FrontEnd/README.md) - 前端开发指南
 - [爬虫使用说明](spider/README.md) - 爬虫模块使用说明
 - [数据库结构说明](database_files/readme.md) - 数据库设计文档
 - [数据库ER图](database_files/erdiagram.md) - 数据库关系图
-- [文件夹结构说明](FOLDER_STRUCTURE.md) - 项目文件夹用途说明
 
 ## 技术栈
 
-- **后端（Java）**：Spring Boot 3.2.0, JDBC, Java 17
-  - 使用JDBC连接MySQL数据库（替代Python的PyMySQL）
+- **后端（Java）**：Spring Boot 3.2.0, JDBC
+  - 使用JDBC连接MySQL数据库
   - RESTful API服务
   - MVC架构（Controller-Service-DAO）
+  - 推荐使用最新LTS版本的Java（如Java 17或21）
   
 - **后端（Python - 可选）**：Flask, LangChain, PyMySQL
   - AIGC功能（AI生成）
@@ -290,7 +286,7 @@ python AIGC/aigc_api_server.py
 
 - **前端**：Vue.js 3, Vite, Vue Router 4
 
-- **数据库**：MySQL 5.7+ / MySQL 8.0+
+- **数据库**：MySQL 8.0+（推荐使用最新版本）
   - 使用JDBC连接（Java后端）
   - 支持utf8mb4字符集
 
@@ -328,7 +324,6 @@ python AIGC/aigc_api_server.py
 - **`FrontEnd/public/`**：存储前端静态资源（favicon、视频等）
 - **`uploads/`**：存储用户上传的待审核资源文件
 
-详细说明请参考 [FOLDER_STRUCTURE.md](FOLDER_STRUCTURE.md)
 
 ## 常见问题
 

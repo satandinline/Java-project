@@ -101,10 +101,18 @@ const handleUpload = async () => {
     return;
   }
   
-  // 模拟登录状态，实际项目中应从全局状态获取
-  const userInfo = JSON.parse(localStorage.getItem('userInfo'));
-  if (!userInfo) {
+  // 从sessionStorage获取用户信息（与App.vue保持一致）
+  const userInfoStr = sessionStorage.getItem('userInfo');
+  if (!userInfoStr) {
     message.value = "请先登录";
+    return;
+  }
+  
+  let userInfo;
+  try {
+    userInfo = JSON.parse(userInfoStr);
+  } catch (e) {
+    message.value = "用户信息无效，请重新登录";
     return;
   }
   

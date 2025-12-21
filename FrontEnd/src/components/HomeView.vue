@@ -156,7 +156,23 @@ const fetchResources = async (page = null) => {
       }
     }
     
-    const response = await fetch(`/api/home/resources?page=${page}&page_size=8`);
+    // 添加超时处理（10秒超时）
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    
+    let response;
+    try {
+      response = await fetch(`/api/home/resources?page=${page}&page_size=8`, {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        throw new Error('请求超时，请检查网络连接或后端服务状态');
+      }
+      throw error;
+    }
     
     // 检查响应状态
     if (!response.ok) {
@@ -171,22 +187,8 @@ const fetchResources = async (page = null) => {
       totalPages.value = data.pagination?.total_pages || 1;
       jumpPage.value = currentPage.value;
       
-      // 更新URL中的页码（使用router.push，支持浏览器前进/后退）
-      if (currentPage.value > 1) {
-        router.push({ 
-          path: '/', 
-          query: { page: currentPage.value.toString() } 
-        }).catch(() => {
-          // 忽略导航重复的错误
-        });
-      } else {
-        router.push({ 
-          path: '/', 
-          query: {} 
-        }).catch(() => {
-          // 忽略导航重复的错误
-        });
-      }
+      // 只在页码实际变化时更新URL，避免不必要的路由跳转
+      // 注意：这里不更新URL，让watch监听URL变化来处理，避免循环
       
       // 如果资源列表为空，输出提示
       if (resourceList.value.length === 0) {
@@ -202,12 +204,14 @@ const fetchResources = async (page = null) => {
     
     // 根据错误类型显示不同的提示信息
     let errorMessage = '无法加载资源列表';
-    if (error instanceof TypeError && error.message.includes('fetch')) {
-      errorMessage = '无法连接到后端服务，请确认后端服务是否已启动';
+    if (error.message && error.message.includes('超时')) {
+      errorMessage = '请求超时：无法连接到后端服务（端口8000），请确认后端服务是否已启动';
+    } else if (error instanceof TypeError && (error.message.includes('fetch') || error.message.includes('Failed to fetch'))) {
+      errorMessage = '无法连接到后端服务，请确认后端服务是否已启动（端口8000）';
     } else if (error.message && error.message.includes('HTTP错误')) {
       errorMessage = `后端服务返回错误：${error.message}`;
     } else {
-      errorMessage = `加载失败：${error.message || '未知错误'}，请检查后端服务是否正常运行`;
+      errorMessage = `加载失败：${error.message || '未知错误'}，请检查后端服务是否正常运行（端口8000）`;
     }
     
     // 显示用户友好的错误提示
@@ -322,9 +326,16 @@ watch(() => route.query.page, (newPage) => {
 
 // 初始化
 onMounted(async () => {
-  // 先检查后端服务是否可用
+  // 先检查后端服务是否可用（添加超时，快速失败，不阻塞页面）
+  const healthController = new AbortController();
+  const healthTimeout = setTimeout(() => healthController.abort(), 3000); // 3秒超时
+  
   try {
-    const healthResponse = await fetch('/api/health');
+    const healthResponse = await fetch('/api/health', {
+      signal: healthController.signal
+    });
+    clearTimeout(healthTimeout);
+    
     if (!healthResponse.ok) {
       console.warn('后端健康检查失败，状态码:', healthResponse.status);
     } else {
@@ -335,8 +346,14 @@ onMounted(async () => {
       }
     }
   } catch (error) {
-    console.error('无法连接到后端服务:', error);
-    alert('无法连接到后端服务，请确认后端服务已启动。\n\n请检查：\n1. 后端服务是否正在运行\n2. 查看终端窗口的错误信息\n3. 防火墙设置');
+    clearTimeout(healthTimeout);
+    // 健康检查失败不影响页面加载，只记录日志
+    if (error.name === 'AbortError') {
+      console.warn('后端健康检查超时（3秒），继续加载页面...');
+    } else {
+      console.warn('无法连接到后端服务，继续加载页面:', error);
+    }
+    // 不显示alert，让fetchResources来处理错误
   }
   
   // 加载资源列表（检查URL中的page参数）

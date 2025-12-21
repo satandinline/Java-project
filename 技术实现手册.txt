@@ -3,12 +3,12 @@
 ================================================================================
 
 版本：2.0
-更新日期：2025年12月20日
+更新日期：2025年12月21日
 
 重要更新：
-- 后端已从Python Flask迁移到Java Spring Boot
-- 数据库连接从PyMySQL改为JDBC
-- 采用标准的MVC架构（Controller-Service-DAO）
+- 优化前端性能：为API请求添加10秒超时处理，避免页面一直加载
+- 优化路由守卫逻辑，避免与组件生命周期冲突
+- 改进错误提示信息，帮助用户快速定位问题
 
 ================================================================================
 一、目录
@@ -51,8 +51,8 @@
 
 说明：
 - Java后端负责主要的API服务（认证、资源、统计等）
-- Python服务可选，用于AIGC功能（AI生成）
-- 数据库使用JDBC连接（替代PyMySQL）
+- Python服务可选，用于AIGC功能（AI生成）和爬虫功能
+- 数据库使用JDBC连接（Java后端）
 
 模块划分
 
@@ -83,7 +83,7 @@
 5. 数据库模块 (`database_files/`)
    - 数据库初始化
    - 表结构定义
-   - 数据迁移脚本
+   - 初始化脚本
 
 ================================================================================
 
@@ -91,11 +91,11 @@
 
 Java后端技术
 
-- Java 17: 开发语言
+- Java: 开发语言（推荐使用最新LTS版本，如Java 17/21）
 - Spring Boot 3.2.0: Web应用框架
 - Spring JDBC: 数据库访问框架
-- JDBC: MySQL数据库连接（替代PyMySQL）
-- MySQL Connector/J: MySQL JDBC驱动
+- JDBC: MySQL数据库连接
+- MySQL Connector/J: MySQL JDBC驱动（最新版本）
 - Maven: 项目管理和构建工具
 
 Python后端技术（可选，用于AIGC功能）
@@ -118,9 +118,10 @@ Python后端技术（可选，用于AIGC功能）
 
 数据库
 
-- MySQL 5.7+ / MySQL 8.0+: 关系型数据库
+- MySQL 8.0+: 关系型数据库（推荐使用最新版本）
 - 字符集: utf8mb4（支持emoji等特殊字符）
-- 连接方式: JDBC（Java后端），PyMySQL（Python服务）
+- 连接方式: JDBC（Java后端），PyMySQL（Python服务，仅用于AIGC和爬虫）
+- 版本要求: MySQL 8.0 或更高版本
 
 AI模型（需要Python服务）
 
@@ -192,11 +193,12 @@ CREATE TABLE users (
 记录所有用户访问行为。
 
 关键字段：
-- `user_id`: 用户ID（可为NULL，表示未登录访问）
-- `access_type`: 访问类型（'page_view', 'aigc_text', 'aigc_image', 'search', 'upload'等）
-- `access_detail`: JSON格式的访问详情
-- `ip_address`: 用户IP地址
-- `user_agent`: 用户代理字符串
+- `user_id`: 用户ID（外键，关联users表，包括管理员）
+- `access_type`: 访问类型（'page_view'：页面访问，'aigc_text'：文字AIGC，'aigc_image'：图片AIGC，'search'：搜索，'upload'：上传等）
+- `access_path`: 访问路径（如：/aigc, /search等）
+- `resource_id`: 关联资源ID（可选）
+- `resource_type`: 资源类型（可选）
+- `access_time`: 访问时间
 
 数据关联关系
 
@@ -253,7 +255,7 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://127.0.0.1:3306/java_project?useUnicode=true&characterEncoding=utf8mb4&useSSL=false&serverTimezone=Asia/Shanghai
     username: root
-    password: M17382930994c@
+    password: your_password  # 请替换为实际密码
 ```
 
 使用JdbcTemplate进行数据库操作：
@@ -452,7 +454,7 @@ RAG检索增强生成
 - 使用Vue 3 Composition API
 - 使用ref管理状态（settingsTab, fromAvatarClick等）
 - 条件渲染显示不同的设置面板
-- 使用localStorage保存用户信息
+- 使用sessionStorage保存用户信息（关闭浏览器后需要重新登录）
 - 所有API调用都包含X-User-Id请求头
 
 ================================================================================
@@ -616,19 +618,23 @@ GET /api/admin/dashboard/statistics
 响应：
 {
   "success": true,
-  "statistics": {
+  "data": {
     "total_users": 100,
     "today_users": 10,
-    "total_text_aigc_users": 50,
-    "today_text_aigc_users": 5,
-    "total_image_aigc_users": 30,
-    "today_image_aigc_users": 3,
+    "total_text_users": 50,
+    "today_text_users": 5,
+    "total_image_users": 30,
+    "today_image_users": 3,
+    "total_text_count": 200,
+    "today_text_count": 15,
+    "total_image_count": 100,
+    "today_image_count": 8,
     "trend_data": [
       {
         "date": "2024-01-15",
-        "visits": 10,
-        "text_aigc": 5,
-        "image_aigc": 3
+        "daily_users": 10,
+        "text_count": 5,
+        "image_count": 3
       }
     ]
   }
@@ -734,7 +740,7 @@ Vue.js代码规范
    - ✅ 统一错误处理模式
 
 3. 命名不一致：
-   - ✅ 统一使用`account`替代`username`
+   - ✅ 统一使用`account`作为用户账号字段名
    - ✅ 统一字段命名规范
 
 4. 性能优化：
@@ -748,9 +754,9 @@ Vue.js代码规范
 
 环境要求
 
-- Java 17 或更高版本
+- Java: 最新LTS版本（推荐Java 17或21）
 - Maven 3.6 或更高版本
-- MySQL 5.7+ / MySQL 8.0+
+- MySQL 8.0 或更高版本（推荐使用最新版本）
 - Node.js 16+（前端）
 - Python 3.7+（可选，用于爬虫和AIGC功能）
 - 至少2GB内存
@@ -758,7 +764,7 @@ Vue.js代码规范
 部署步骤
 
 1. 安装Java和Maven：
-   - 下载并安装JDK 17
+   - 下载并安装最新LTS版本的JDK（推荐Java 17或21）
    - 下载并安装Maven 3.6+
    - 配置JAVA_HOME和MAVEN_HOME环境变量
 
@@ -845,19 +851,24 @@ Vue.js代码规范
 1. 数据库连接失败
 
 检查项：
-- MySQL服务是否运行
+- MySQL服务是否运行（MySQL 8.0+）
 - `backend/src/main/resources/application.yml`中的数据库配置是否正确
 - 数据库用户权限
 - JDBC驱动是否正确加载
+- 检查MySQL版本是否为8.0或更高版本
 
-2. API请求失败
+2. API请求失败或页面加载缓慢
 
 检查项：
 - Java后端服务是否运行（端口8000）
   - 检查：`cd backend && mvn spring-boot:run`
   - 查看控制台是否有启动错误
+  - 确认后端服务正常启动后再访问前端
 - 前端代理配置是否正确（`FrontEnd/vite.config.js`）
+- 前端请求超时设置（默认10秒）
+- 查看浏览器控制台是否有错误信息
 - 查看后端日志
+- 如果后端服务未运行，前端会在10秒后显示超时错误
 
 3. 图片无法显示
 
@@ -881,18 +892,30 @@ Vue.js代码规范
 - Maven配置是否正确
 - 网络连接是否正常
 - 可以配置Maven镜像加速下载
+- 确认Java版本是否为最新LTS版本（推荐Java 17或21）
+
+6. 页面无法打开或一直加载
+
+检查项：
+- 确认后端服务已启动（端口8000）
+  - 运行 `cd backend && mvn spring-boot:run`
+  - 检查控制台是否有启动成功信息
+- 检查浏览器控制台错误信息（F12）
+  - 如果看到 "Content process isn't responsive"，可能是浏览器资源问题
+  - 如果看到 "请求超时"，说明后端服务未运行
+- 清除浏览器缓存（Ctrl+Shift+Delete）
+- 检查前端服务是否正常运行（端口5173）
+- 确认网络连接正常
+- 如果后端服务未运行，页面会在10秒后显示超时错误提示
+- 检查端口8000是否被占用：`netstat -ano | findstr :8000`
+- 尝试使用隐私/无痕模式打开页面
+- 详细排查步骤请参考 `FrontEnd/TROUBLESHOOTING.md`
 
 ================================================================================
 
 版本历史
 
-v2.0.0 (当前版本) - 2025年12月20日
-
-主要更新：
-- ✅ 后端从Python Flask迁移到Java Spring Boot
-- ✅ 数据库连接从PyMySQL改为JDBC
-- ✅ 采用标准的MVC架构（Controller-Service-DAO）
-- ✅ 改进代码组织和可维护性
+v2.0.0 (当前版本) - 2025年12月21日
 
 主要特性：
 - 用户注册/登录（自动生成账号）
@@ -901,24 +924,10 @@ v2.0.0 (当前版本) - 2025年12月20日
 - 数据大屏统计
 - 评论与通知系统
 
-技术改进：
-- 使用Java Spring Boot提供更稳定的后端服务
-- JDBC连接提供更好的数据库性能
-- 标准化的代码架构便于维护和扩展
-- 延迟加载优化启动速度（Python AIGC服务）
-- 数据关联优化
-- 代码质量提升
-
-v1.0.0 (历史版本)
-
-主要特性：
-- 用户注册/登录（自动生成账号）
-- 文化资源爬取与清洗
-- AIGC文字/图片生成
-- 数据大屏统计
-- 评论与通知系统
-
-技术栈：Python Flask + PyMySQL
+技术栈：
+- Java后端：Spring Boot 3.2.0 + JDBC + MySQL 8.0+
+- Python服务：Flask（AIGC功能）
+- 前端：Vue.js 3 + Vite
 
 ================================================================================
 

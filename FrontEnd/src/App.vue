@@ -430,6 +430,7 @@ const changeSignatureSuccess = ref('');
 onMounted(() => {
   console.log('App.vue mounted');
   // 从sessionStorage读取用户信息（sessionStorage在刷新后会清空，需要重新登录）
+  // 注意：路由守卫已经处理了登录跳转，这里只负责更新组件状态，不进行路由跳转
   const savedUser = sessionStorage.getItem('userInfo');
   if (savedUser) {
     try {
@@ -439,9 +440,7 @@ onMounted(() => {
         console.log('sessionStorage中的用户信息无效，已清除');
         sessionStorage.removeItem('userInfo');
         userInfo.value = null;
-        if (router.currentRoute.value.path !== '/login') {
-          router.push('/login');
-        }
+        // 路由守卫会处理跳转，这里不需要手动跳转
         return;
       }
       userInfo.value = parsedUser;
@@ -450,15 +449,12 @@ onMounted(() => {
       console.error('解析用户信息失败:', e);
       sessionStorage.removeItem('userInfo');
       userInfo.value = null;
-      if (router.currentRoute.value.path !== '/login') {
-        router.push('/login');
-      }
+      // 路由守卫会处理跳转，这里不需要手动跳转
     }
   } else {
-    console.log('未找到用户信息，需要登录');
-    if (router.currentRoute.value.path !== '/login') {
-      router.push('/login');
-    }
+    console.log('未找到用户信息');
+    userInfo.value = null;
+    // 路由守卫会处理跳转，这里不需要手动跳转
   }
 });
 
