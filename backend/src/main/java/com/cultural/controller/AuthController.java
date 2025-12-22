@@ -73,5 +73,59 @@ public class AuthController {
         }
     }
 
+    /**
+     * 用户登出
+     * POST /api/auth/logout
+     */
+    @PostMapping("/logout")
+    public ResponseEntity<Map<String, Object>> logout(@RequestBody Map<String, Long> request) {
+        Long userId = request.get("user_id");
+        Map<String, Object> result = authService.logout(userId);
+        
+        if ((Boolean) result.get("success")) {
+            return ResponseEntity.ok(result);
+        } else {
+            return ResponseEntity.badRequest().body(result);
+        }
+    }
+
+    /**
+     * 获取所有用户列表（仅超级管理员）
+     * GET /api/auth/users
+     */
+    @GetMapping("/users")
+    public ResponseEntity<Map<String, Object>> getAllUsers(@RequestParam Long userId) {
+        Map<String, Object> result = authService.getAllUsers(userId);
+        
+        if ((Boolean) result.get("success")) {
+            return ResponseEntity.ok(result);
+        } else {
+            // 如果是权限错误，返回403
+            if (result.containsKey("message") && result.get("message").toString().contains("权限")) {
+                return ResponseEntity.status(403).body(result);
+            }
+            return ResponseEntity.badRequest().body(result);
+        }
+    }
+
+    /**
+     * 切换用户身份（仅超级管理员）
+     * POST /api/auth/switch-role
+     */
+    @PostMapping("/switch-role")
+    public ResponseEntity<Map<String, Object>> switchUserRole(@RequestBody Map<String, Object> request) {
+        Long currentUserId = ((Number) request.get("current_user_id")).longValue();
+        Long targetUserId = ((Number) request.get("target_user_id")).longValue();
+        String newRole = (String) request.get("new_role");
+        
+        Map<String, Object> result = authService.switchUserRole(currentUserId, targetUserId, newRole);
+        
+        if ((Boolean) result.get("success")) {
+            return ResponseEntity.ok(result);
+        } else {
+            return ResponseEntity.badRequest().body(result);
+        }
+    }
+
 }
 

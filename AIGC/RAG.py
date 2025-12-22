@@ -84,7 +84,7 @@ class CulturalResourceRAG:
         self.database_name = database_name
         self.retrieval_tables = retrieval_tables or ["cultural_resources", "cultural_entities", 
                                                       "entity_relationships", "AIGC_cultural_resources",
-                                                      "AIGC_graph", "crawled_images"]
+                                                      "AIGC_graph", "crawled_images", "cultural_resources_from_user"]
         
         # 多轮对话支持：存储对话历史
         self.conversation_history: List[Dict] = []
@@ -112,7 +112,7 @@ class CulturalResourceRAG:
         self.format_instructions = self.output_parser.get_format_instructions()
 
         template = textwrap.dedent("""
-        你是一位专门研究中国传统节日的文化学者。请基于提供的【参考资料】和【对话历史】回答用户关于传统节日的【问题】。
+        你是一位专门研究中国传统节日的文化学者和公共文化资源创作者。请基于提供的【参考资料】和【对话历史】，以创新性和独特性的方式回答用户关于传统节日的【问题】。
 
         【参考资料】：
         {context}
@@ -123,13 +123,27 @@ class CulturalResourceRAG:
         【用户问题】：
         {question}
 
-        【回答要求】：
-        1. **准确性：严格依据参考资料回答，涉及节日名称、起源、习俗、传说、时间、地域特色等要准确无误。如资料不足，明确说明，不要编造不存在的信息。**
-        2. **结构化：必须按照指定的JSON格式输出，不要包含任何其他解释性文字。**
-        3. **风格：语言典雅、准确、自然流畅，符合公共文化服务场景，突出传统节日的文化内涵和民俗价值，避免模板化和机械化的表达。**
-        4. **重点：关注节日的文化意义、传统习俗、历史演变、地域特色等公共文化资源相关内容，回答要详细、具体，包含具体的文化实践细节。**
-        5. **连贯性：如果对话历史中有相关信息，请结合历史对话内容，使回答更加连贯和完整，体现对话的连续性。**
-        6. **真实性：回答要基于真实的参考资料，不能编造或虚构，要让回答看起来像真实的文化知识记录，而非AI生成的模板化内容。**
+        【核心创作原则】：
+        1. **创新性与原创性**：你的回答不是简单复制参考资料，而是要基于参考资料进行深度创作和创新表达。要像一位真正的文化研究者一样，提供独特的视角、深入的思考和新颖的表述方式。避免使用常见的AI生成模板句式（如"首先...其次...最后..."、"综上所述"等）。
+        
+        2. **真实性而非检索感**：回答要像真实的文化资源记录，而不是搜索引擎的检索结果。要融入个人观察、文化感悟和独特见解，让内容具有人文温度和文化深度。避免直接引用参考资料的原句，要用自己的语言重新组织和表达。
+        
+        3. **具体细节与生活气息**：回答要包含具体的文化实践细节、真实的生活场景、生动的描述，让内容有血有肉。例如，不要只说"人们会祭祀"，而要描述"村民们会在祠堂前摆上三牲五果，点燃香烛，向祖先表达敬意"这样的具体场景。
+        
+        4. **文化深度与独特性**：要深入挖掘节日的文化内涵，提供独特的文化解读。不要停留在表面的描述，而要揭示节日背后的文化逻辑、社会意义和人文价值。每个回答都应该有独特的文化视角和思考深度。
+        
+        5. **自然流畅的表达**：语言要自然流畅，像一位真正的文化学者在讲述，而不是AI在生成。要有适当的语气变化、情感色彩和表达个性。避免过于完美、过于规整的表达，要有一定的自然度和真实感。
+        
+        6. **准确性基础**：在保持创新性的同时，涉及节日名称、起源、习俗、传说、时间、地域特色等核心信息要准确无误。如参考资料不足，可以基于文化逻辑进行合理推断，但要明确说明这是基于文化传统的合理推测。
+
+        【特别要求】：
+        - 如果用户要求生成文章、短文或公共文化普及内容，要特别强调创新性、独特性和原创性，让生成的内容可以作为新的、独立的公共文化资源。
+        - 避免使用"据了解"、"资料显示"、"研究表明"等明显的检索性表述。
+        - 避免使用过于规整的段落结构和过于完美的句式，要有一定的自然变化。
+        - 要让内容看起来像是由真正的文化研究者或文化工作者创作的，而不是AI生成的。
+
+        【输出格式】：
+        必须按照指定的JSON格式输出，不要包含任何其他解释性文字。
 
         {format_instructions}
         """)
@@ -177,18 +191,37 @@ class CulturalResourceRAG:
 
         self.gen_prompt_template = PromptTemplate(
             template=textwrap.dedent("""
-            你是一位富有创造力的传统节日文化研究者。
+            你是一位富有创造力和文化洞察力的传统节日文化研究者，擅长创作具有原创性和独特性的公共文化资源。
+            
             输入：传统节日名称："{festival}"，以及可选提示："{hint}"。
-            任务：基于该传统节日的文化主题与情感内涵，创造一个新的公共文化资源（可以是新的故事、仪式、象征或节庆活动），
-            要求：
-              1) **必须原创，不要复刻或明显模仿任何已知传说或真实节日活动，但要在传统节日文化框架内创作。**
-              2) **必须深入体现传统节日的文化内涵、历史渊源、民俗传统和象征意义，具有公共文化资源的特性，内容要真实可信，不能明显看出是AI生成的。**
-              3) **内容要富有文化特色，包含具体的传统元素（如传统器物、传统服饰、传统建筑、传统习俗等），体现文化传承价值，细节要详实具体。**
-              4) **风格自然、具有人情味，符合传统节日的文化氛围，避免模板化、机械化、过于完美的表达，语言要流畅自然，有生活气息。**
-              5) **故事内容要详细、生动，包含具体的情节发展、人物活动、环境描述等，让内容看起来像真实的文化资源记录。**
-              6) **要体现传统节日的具体文化实践，如具体的仪式步骤、具体的习俗活动、具体的文化符号等，不能只有抽象的描述。**
-              7) **输出必须严格按照指定的JSON格式（不要包含多余文字）。**
-            输出格式说明（遵守 JSON）：
+            
+            任务：基于该传统节日的文化主题与情感内涵，创造一个全新的、独立的公共文化资源（可以是新的故事、仪式、象征或节庆活动），这个资源要能够作为新的公共文化资源被使用和传播。
+            
+            【核心创作要求】：
+            1) **绝对原创性**：必须完全原创，不能复刻、模仿或改编任何已知的传说、故事或真实节日活动。要像一位真正的文化创作者一样，基于节日的文化内核，创作出全新的、具有独特性的文化内容。创作的内容要让人感觉是首次发现或首次记录的文化资源，而不是AI生成的模板化内容。
+            
+            2) **文化深度与真实性**：必须深入挖掘传统节日的文化内涵、历史渊源、民俗传统和象征意义。创作的内容要具有公共文化资源的特性，要真实可信，让人感觉这是真实存在的文化传统，而不是虚构的。要像一位真正的文化研究者记录和整理文化资源一样，有文化深度和学术严谨性。
+            
+            3) **具体细节与生活化**：内容要包含大量具体的传统元素和细节，如传统器物的具体名称和用途、传统服饰的具体样式和象征、传统建筑的具体特征、传统习俗的具体步骤等。这些细节要详实具体，要有生活气息，让人感觉这是真实的文化实践，而不是抽象的概念描述。
+            
+            4) **自然表达与人文温度**：风格要自然、具有人情味，符合传统节日的文化氛围。要避免模板化、机械化、过于完美的表达。语言要流畅自然，有生活气息，要有适当的语气变化和情感色彩。要让内容看起来像是由真正的文化工作者或文化研究者创作的，而不是AI生成的。
+            
+            5) **生动叙事与场景感**：故事内容要详细、生动，包含具体的情节发展、人物活动、环境描述、时间背景等。要让内容有画面感，让人能够想象出具体的场景。要让内容看起来像真实的文化资源记录，有历史感和文化感。
+            
+            6) **可实践的文化内容**：要体现传统节日的具体文化实践，如具体的仪式步骤（每一步都要详细）、具体的习俗活动（每个环节都要具体）、具体的文化符号（每个符号都要有明确的含义和用途）等。不能只有抽象的描述，要有可操作、可实践的具体内容。
+            
+            7) **独特性与辨识度**：创作的内容要有独特性，要有自己的文化特色和辨识度。要让内容看起来是首次创作或首次记录的文化资源，而不是常见的、模板化的内容。要让人感觉这是有价值的、值得传播的新的公共文化资源。
+            
+            【避免的问题】：
+            - 避免使用"据了解"、"资料显示"、"研究表明"等明显的检索性表述
+            - 避免使用"首先...其次...最后..."、"综上所述"等AI生成模板句式
+            - 避免过于完美、过于规整的表达，要有一定的自然度和真实感
+            - 避免直接复制或改编已知的传说和故事
+            - 避免只有抽象概念而没有具体细节的内容
+            
+            【输出格式】：
+            必须严格按照指定的JSON格式输出，不要包含任何其他解释性文字。
+            
             {format_instructions}
             """),
             input_variables=["festival", "hint"],
@@ -375,14 +408,21 @@ class CulturalResourceRAG:
                     elif table == "cultural_entities":
                         sql = """
                             SELECT id, entity_name, entity_type, description, source, 
-                                   period_era, cultural_region, cultural_value
+                                   period_era, geo_coordinates, cultural_region, 
+                                   style_features, cultural_value, related_images_url, digital_resource_link
                             FROM cultural_entities
-                            WHERE entity_name LIKE %s OR description LIKE %s 
-                                  OR entity_type LIKE %s
-                            LIMIT 10
+                            WHERE entity_name LIKE %s 
+                               OR description LIKE %s 
+                               OR entity_type LIKE %s
+                               OR source LIKE %s
+                               OR period_era LIKE %s
+                               OR cultural_region LIKE %s
+                               OR style_features LIKE %s
+                               OR cultural_value LIKE %s
+                            LIMIT 20
                         """
                         pattern = f"%{query}%"
-                        cursor.execute(sql, (pattern, pattern, pattern))
+                        cursor.execute(sql, (pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern))
                         rows = cursor.fetchall()
                         for row in rows:
                             content_parts = []
@@ -394,6 +434,10 @@ class CulturalResourceRAG:
                                 content_parts.append(f"时期：{row.get('period_era')}")
                             if row.get("cultural_region"):
                                 content_parts.append(f"文化区域：{row.get('cultural_region')}")
+                            if row.get("style_features"):
+                                content_parts.append(f"风格特征：{row.get('style_features')}")
+                            if row.get("geo_coordinates"):
+                                content_parts.append(f"地理坐标：{row.get('geo_coordinates')}")
                             
                             results.append({
                                 "table": "cultural_entities",
@@ -493,27 +537,46 @@ class CulturalResourceRAG:
                     
                     elif table == "crawled_images":
                         sql = """
-                            SELECT id, file_name, storage_path, dimensions, tags
-                            FROM crawled_images
-                            WHERE file_name LIKE %s OR JSON_SEARCH(tags, 'one', %s) IS NOT NULL
-                            LIMIT 10
+                            SELECT ci.id, ci.file_name, ci.storage_path, ci.dimensions, ci.tags,
+                                   ci.resource_id, ci.entity_id, ci.festival_name,
+                                   cr.title as resource_title, ce.entity_name
+                            FROM crawled_images ci
+                            LEFT JOIN cultural_resources cr ON ci.resource_id = cr.id
+                            LEFT JOIN cultural_entities ce ON ci.entity_id = ce.id
+                            WHERE ci.file_name LIKE %s 
+                               OR JSON_SEARCH(ci.tags, 'one', %s) IS NOT NULL
+                               OR ci.festival_name LIKE %s
+                               OR cr.title LIKE %s
+                               OR ce.entity_name LIKE %s
+                            LIMIT 20
                         """
                         pattern = f"%{query}%"
-                        cursor.execute(sql, (pattern, pattern))
+                        cursor.execute(sql, (pattern, pattern, pattern, pattern, pattern))
                         rows = cursor.fetchall()
                         for row in rows:
                             storage_path = row.get("storage_path", "")
                             # 构建完整路径：项目根目录的crawled_images文件夹 + storage_path
                             base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                             full_path = os.path.join(base_dir, "crawled_images", storage_path) if storage_path else ""
+                            # 如果storage_path已经是完整路径，直接使用
+                            if not os.path.exists(full_path) and storage_path:
+                                # 尝试直接使用storage_path
+                                if os.path.exists(storage_path):
+                                    full_path = storage_path
+                                else:
+                                    # 尝试从项目根目录查找
+                                    full_path = os.path.join(base_dir, storage_path)
+                            
                             results.append({
                                 "table": "crawled_images",
                                 "id": row.get("id"),
                                 "title": row.get("file_name", ""),
-                                "content": f"图片路径：{full_path}，尺寸：{row.get('dimensions', '未知')}",
+                                "content": f"图片路径：{full_path}，尺寸：{row.get('dimensions', '未知')}，关联资源：{row.get('resource_title', '')}，关联实体：{row.get('entity_name', '')}",
                                 "source": "爬虫抓取",
                                 "url": full_path,
-                                "image_path": full_path
+                                "image_path": full_path,
+                                "resource_id": row.get("resource_id"),
+                                "entity_id": row.get("entity_id")
                             })
         
         except Exception as e:

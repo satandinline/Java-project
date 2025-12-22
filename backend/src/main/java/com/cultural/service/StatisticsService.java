@@ -1,5 +1,7 @@
 package com.cultural.service;
 
+import com.cultural.dao.UserDao;
+import com.cultural.entity.User;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -8,6 +10,7 @@ import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * 统计服务类
@@ -18,11 +21,29 @@ public class StatisticsService {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private com.cultural.dao.UserDao userDao;
+
     /**
-     * 获取所有统计数据
+     * 获取所有统计数据（需要管理员或超级管理员权限）
      */
-    public Map<String, Object> getStatistics() {
+    public Map<String, Object> getStatistics(Long userId) {
         Map<String, Object> result = new HashMap<>();
+        
+        // 检查用户权限
+        if (userId != null) {
+            java.util.Optional<com.cultural.entity.User> userOpt = userDao.findById(userId);
+            if (userOpt.isPresent()) {
+                com.cultural.entity.User user = userOpt.get();
+                String role = user.getRole();
+                if (!"管理员".equals(role) && !"超级管理员".equals(role)) {
+                    result.put("success", false);
+                    result.put("message", "权限不足,仅管理员可访问");
+                    return result;
+                }
+            }
+        }
+        
         LocalDate today = LocalDate.now();
 
         try {

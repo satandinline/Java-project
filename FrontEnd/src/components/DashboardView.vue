@@ -26,7 +26,8 @@
     <div v-if="!isLoading && !error && statistics" class="dashboard-content">
       <!-- 核心指标卡片 -->
       <div class="stats-grid">
-        <div class="stat-card">
+        <!-- 访问数据组 -->
+        <div class="stat-card stat-card-primary">
           <div class="stat-icon">👥</div>
           <div class="stat-content">
             <div class="stat-label">历史访问人次</div>
@@ -34,7 +35,7 @@
           </div>
         </div>
 
-        <div class="stat-card">
+        <div class="stat-card stat-card-primary">
           <div class="stat-icon">📅</div>
           <div class="stat-content">
             <div class="stat-label">今日访问人次</div>
@@ -42,7 +43,8 @@
           </div>
         </div>
 
-        <div class="stat-card">
+        <!-- 文字AIGC组 -->
+        <div class="stat-card stat-card-secondary">
           <div class="stat-icon">💬</div>
           <div class="stat-content">
             <div class="stat-label">历史文字AIGC使用人次</div>
@@ -51,7 +53,7 @@
           </div>
         </div>
 
-        <div class="stat-card">
+        <div class="stat-card stat-card-secondary">
           <div class="stat-icon">📅💬</div>
           <div class="stat-content">
             <div class="stat-label">今日文字AIGC使用人次</div>
@@ -60,7 +62,8 @@
           </div>
         </div>
 
-        <div class="stat-card">
+        <!-- 图片AIGC组 -->
+        <div class="stat-card stat-card-tertiary">
           <div class="stat-icon">🖼️</div>
           <div class="stat-content">
             <div class="stat-label">历史图片AIGC使用人次</div>
@@ -69,7 +72,7 @@
           </div>
         </div>
 
-        <div class="stat-card">
+        <div class="stat-card stat-card-tertiary">
           <div class="stat-icon">📅🖼️</div>
           <div class="stat-content">
             <div class="stat-label">今日图片AIGC使用人次</div>
@@ -82,8 +85,38 @@
       <!-- 趋势图表 -->
       <div class="chart-section">
         <h2>最近7天使用趋势</h2>
-        <div class="chart-container">
-          <canvas ref="trendChart" id="trendChart"></canvas>
+        <div class="charts-grid">
+          <!-- 访问人次趋势图 -->
+          <div class="chart-item">
+            <h3>访问人次趋势</h3>
+            <div class="chart-container">
+              <canvas ref="usersChart" id="usersChart"></canvas>
+            </div>
+          </div>
+          
+          <!-- 文字AIGC使用人次趋势图 -->
+          <div class="chart-item">
+            <h3>文字AIGC使用人次趋势</h3>
+            <div class="chart-container">
+              <canvas ref="textChart" id="textChart"></canvas>
+            </div>
+          </div>
+          
+          <!-- 图片AIGC使用人次趋势图 -->
+          <div class="chart-item">
+            <h3>图片AIGC使用人次趋势</h3>
+            <div class="chart-container">
+              <canvas ref="imageChart" id="imageChart"></canvas>
+            </div>
+          </div>
+          
+          <!-- AIGC总使用人次趋势图 -->
+          <div class="chart-item">
+            <h3>AIGC总使用人次趋势</h3>
+            <div class="chart-container">
+              <canvas ref="totalAigcChart" id="totalAigcChart"></canvas>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -91,7 +124,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick } from 'vue';
+import { ref, onMounted, nextTick, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
 const router = useRouter();
@@ -99,7 +132,10 @@ const router = useRouter();
 const statistics = ref(null);
 const isLoading = ref(false);
 const error = ref(null);
-const trendChart = ref(null);
+const usersChart = ref(null);
+const textChart = ref(null);
+const imageChart = ref(null);
+const totalAigcChart = ref(null);
 const currentDate = ref('');
 const currentTime = ref('');
 
@@ -146,18 +182,24 @@ const loadStatistics = async () => {
     // 注意：前端只做基本检查，真正的权限验证在API后端（从数据库users表读取role字段）
     // 如果前端role字段不存在或不正确，后端会返回403错误
 
-    const response = await fetch(`/api/admin/dashboard/statistics?user_id=${userInfo.id}`);
+    const response = await fetch(`/api/statistics?userId=${userInfo.id}`);
+    
+    if (!response.ok) {
+      if (response.status === 403) {
+        const errorData = await response.json().catch(() => ({}));
+        error.value = errorData.message || '权限不足,仅管理员可访问';
+      } else {
+        error.value = `加载失败：HTTP ${response.status}`;
+      }
+      return;
+    }
+    
     const data = await response.json();
-
+    
     if (data.success) {
       statistics.value = data.data;
       console.log('统计数据加载成功:', statistics.value);
-      // 等待DOM更新后绘制图表
-      await nextTick();
-      // 使用setTimeout确保DOM完全渲染
-      setTimeout(() => {
-        drawTrendChart();
-      }, 100);
+      // 等待DOM更新后绘制图表（通过watch自动触发）
     } else {
       error.value = data.message || '获取统计数据失败';
     }
@@ -169,21 +211,87 @@ const loadStatistics = async () => {
   }
 };
 
-// 绘制趋势图表（折线图）
-const drawTrendChart = () => {
-  if (!statistics.value || !statistics.value.trend_data || !trendChart.value) {
+// 绘制所有趋势图表（带重试机制）
+const drawAllCharts = (retryCount = 0, maxRetries = 5) => {
+  if (!statistics.value || !statistics.value.trend_data) {
     console.log('图表绘制条件不满足:', {
       hasStatistics: !!statistics.value,
-      hasTrendData: !!(statistics.value && statistics.value.trend_data),
-      hasCanvas: !!trendChart.value
+      hasTrendData: !!(statistics.value && statistics.value.trend_data)
     });
     return;
   }
 
-  const canvas = trendChart.value;
-  const ctx = canvas.getContext('2d');
+  // 检查所有canvas ref是否存在
+  const missingCanvas = [];
+  if (!usersChart.value) missingCanvas.push('usersChart');
+  if (!textChart.value) missingCanvas.push('textChart');
+  if (!imageChart.value) missingCanvas.push('imageChart');
+  if (!totalAigcChart.value) missingCanvas.push('totalAigcChart');
+  
+  if (missingCanvas.length > 0) {
+    if (retryCount < maxRetries) {
+      const delay = Math.min(200 * (retryCount + 1), 1000); // 递增延迟，最多1秒
+      console.warn(`部分canvas未找到，跳过绘制: ${missingCanvas.join(', ')} (重试 ${retryCount + 1}/${maxRetries})`);
+      setTimeout(() => {
+        drawAllCharts(retryCount + 1, maxRetries);
+      }, delay);
+      return;
+    } else {
+      console.error('Canvas元素始终未找到，请检查DOM结构:', missingCanvas);
+      return;
+    }
+  }
+
   let trendData = statistics.value.trend_data || [];
 
+  // 直接使用后端返回的数据（后端已经确保有7天数据，且最后一天是今天）
+  // 后端返回的数据已经按i从6到0的顺序，即从6天前到今天
+  // 但为了确保顺序正确，我们按日期排序
+  trendData.sort((a, b) => {
+    if (!a || !a.date || !b || !b.date) return 0;
+    // 直接比较日期字符串（YYYY-MM-DD格式）
+    return a.date.localeCompare(b.date);
+  });
+  
+  // 调试输出
+  console.log('趋势数据（后端返回，排序后）:', trendData.map(d => ({ 
+    date: d.date, 
+    daily_users: d.daily_users, 
+    text_count: d.text_count,
+    image_count: d.image_count
+  })));
+  
+  // 验证数据完整性：确保有7条数据
+  const requiredDays = 7;
+  if (trendData.length !== requiredDays) {
+    console.warn(`趋势数据条数不正确：期望${requiredDays}条，实际${trendData.length}条`);
+  }
+  
+  // 验证最后一天是否是今天（使用后端返回的日期作为标准，因为后端使用数据库CURDATE()更准确）
+  // 注意：前端计算的日期可能有时区问题，所以信任后端返回的日期
+  if (trendData.length > 0) {
+    const lastDate = trendData[trendData.length - 1].date;
+    // 后端返回的最后一天应该是数据库的今天（CURDATE()），这是准确的
+    // 不再进行前端日期比较，避免时区问题
+    console.log(`趋势数据最后一天：${lastDate}（由数据库CURDATE()确定）`);
+  }
+
+  // 绘制四个独立的图表
+  drawSingleChart(usersChart.value, trendData, 'daily_users', '#409eff', '访问人次');
+  drawSingleChart(textChart.value, trendData, 'text_count', '#67c23a', '文字AIGC使用人次');
+  drawSingleChart(imageChart.value, trendData, 'image_count', '#e6a23c', '图片AIGC使用人次');
+  drawSingleChart(totalAigcChart.value, trendData, 'total_aigc_count', '#f56c6c', 'AIGC总使用人次');
+};
+
+// 绘制单个趋势图表
+const drawSingleChart = (canvas, trendData, dataKey, color, label) => {
+  if (!canvas) {
+    console.error(`无法找到画布: ${label}`);
+    return;
+  }
+
+  const ctx = canvas.getContext('2d');
+  
   // 设置画布尺寸
   const container = canvas.parentElement;
   if (!container) {
@@ -205,67 +313,10 @@ const drawTrendChart = () => {
     return;
   }
 
-  console.log('趋势数据:', trendData);
-
-  // 确保数据有7条，不足的用0值填充（后端应该已经补齐，但前端做双重保障）
-  const requiredDays = 7;
-  if (trendData.length < requiredDays) {
-    const today = new Date();
-    const completeData = [];
-    
-    // 从6天前到今天（共7天）
-    for (let i = requiredDays - 1; i >= 0; i--) {
-      const date = new Date(today);
-      date.setDate(date.getDate() - i);
-      date.setHours(0, 0, 0, 0); // 设置为当天的0点
-      const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD格式
-      
-      // 查找是否有对应的数据（支持多种日期格式匹配）
-      const existingData = trendData.find(d => {
-        const dDate = d.date || '';
-        // 支持完全匹配或字符串开头匹配
-        if (typeof dDate === 'string') {
-          return dDate === dateStr || dDate.startsWith(dateStr) || dDate.includes(dateStr);
-        }
-        return false;
-      });
-      
-      if (existingData) {
-        // 确保日期格式统一
-        completeData.push({
-          ...existingData,
-          date: dateStr
-        });
-      } else {
-        // 填充0值数据
-        completeData.push({
-          date: dateStr,
-          daily_users: 0,
-          text_count: 0,
-          image_count: 0
-        });
-      }
-    }
-    
-    trendData = completeData;
-  } else {
-    // 如果数据超过7天，只取最近7天
-    trendData = trendData.slice(-requiredDays);
-  }
-  
-  // 确保数据按日期排序（从早到晚）
-  trendData.sort((a, b) => {
-    const dateA = new Date(a.date + 'T00:00:00');
-    const dateB = new Date(b.date + 'T00:00:00');
-    return dateA - dateB;
-  });
-
   // 计算最大值（用于缩放）
-  const maxUsers = Math.max(...trendData.map(d => d.daily_users || 0), 1);
-  const maxCount = Math.max(
-    ...trendData.map(d => (d.text_count || 0) + (d.image_count || 0)),
-    1
-  );
+  const actualMaxValue = Math.max(...trendData.map(d => d[dataKey] || 0));
+  // 当所有数据都是0时，使用固定的最大值6，否则使用实际最大值（至少为1）
+  const maxValue = actualMaxValue === 0 ? 6 : Math.max(actualMaxValue, 1);
 
   const padding = { top: 40, right: 40, bottom: 50, left: 50 };
   const chartWidth = canvas.width - padding.left - padding.right;
@@ -288,25 +339,19 @@ const drawTrendChart = () => {
     return padding.left + (index / (trendData.length - 1)) * chartWidth;
   };
 
-  // 计算Y坐标点位置（使用人次）
-  const getYUsers = (value) => {
-    const ratio = value / maxUsers;
+  // 计算Y坐标点位置
+  const getY = (value) => {
+    const ratio = value / maxValue;
     return canvas.height - padding.bottom - (ratio * chartHeight);
   };
 
-  // 计算Y坐标点位置（AIGC次数，使用右侧Y轴）
-  const getYCount = (value) => {
-    const ratio = value / maxCount;
-    return canvas.height - padding.bottom - (ratio * chartHeight);
-  };
-
-  // 绘制使用人次折线
-  ctx.strokeStyle = '#409eff';
+  // 绘制折线
+  ctx.strokeStyle = color;
   ctx.lineWidth = 2;
   ctx.beginPath();
   trendData.forEach((item, index) => {
     const x = getX(index);
-    const y = getYUsers(item.daily_users || 0);
+    const y = getY(item[dataKey] || 0);
     if (index === 0) {
       ctx.moveTo(x, y);
     } else {
@@ -315,61 +360,11 @@ const drawTrendChart = () => {
   });
   ctx.stroke();
 
-  // 绘制使用人次数据点
-  ctx.fillStyle = '#409eff';
+  // 绘制数据点
+  ctx.fillStyle = color;
   trendData.forEach((item, index) => {
     const x = getX(index);
-    const y = getYUsers(item.daily_users || 0);
-    ctx.beginPath();
-    ctx.arc(x, y, 4, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  // 绘制文字AIGC折线
-  ctx.strokeStyle = '#67c23a';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  trendData.forEach((item, index) => {
-    const x = getX(index);
-    const y = getYCount(item.text_count || 0);
-    if (index === 0) {
-      ctx.moveTo(x, y);
-    } else {
-      ctx.lineTo(x, y);
-    }
-  });
-  ctx.stroke();
-
-  // 绘制文字AIGC数据点
-  ctx.fillStyle = '#67c23a';
-  trendData.forEach((item, index) => {
-    const x = getX(index);
-    const y = getYCount(item.text_count || 0);
-    ctx.beginPath();
-    ctx.arc(x, y, 4, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  // 绘制图片AIGC折线
-  ctx.strokeStyle = '#e6a23c';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  trendData.forEach((item, index) => {
-    const x = getX(index);
-    const y = getYCount(item.image_count || 0);
-    if (index === 0) {
-      ctx.moveTo(x, y);
-    } else {
-      ctx.lineTo(x, y);
-    }
-  });
-  ctx.stroke();
-
-  // 绘制图片AIGC数据点
-  ctx.fillStyle = '#e6a23c';
-  trendData.forEach((item, index) => {
-    const x = getX(index);
-    const y = getYCount(item.image_count || 0);
+    const y = getY(item[dataKey] || 0);
     ctx.beginPath();
     ctx.arc(x, y, 4, 0, Math.PI * 2);
     ctx.fill();
@@ -383,71 +378,97 @@ const drawTrendChart = () => {
     const x = getX(index);
     let dateStr = '';
     
-    // 处理日期格式
     if (item.date) {
-      const date = new Date(item.date + 'T00:00:00'); // 确保正确解析日期
+      const date = new Date(item.date + 'T00:00:00');
       if (!isNaN(date.getTime())) {
         dateStr = `${date.getMonth() + 1}/${date.getDate()}`;
       } else {
-        // 如果日期格式不对，尝试直接解析字符串
-        dateStr = item.date.substring(5).replace('-', '/'); // 从YYYY-MM-DD提取MM/DD
+        dateStr = item.date.substring(5).replace('-', '/');
       }
     }
     
     ctx.fillText(dateStr, x, canvas.height - padding.bottom + 20);
   });
 
-  // 绘制Y轴刻度（使用人次）
+  // 绘制Y轴刻度
   ctx.fillStyle = '#666';
   ctx.font = '10px Arial';
   ctx.textAlign = 'right';
-  for (let i = 0; i <= 5; i++) {
-    const value = Math.round((maxUsers / 5) * i);
-    const y = canvas.height - padding.bottom - (i / 5) * chartHeight;
-    ctx.fillText(value.toString(), padding.left - 10, y + 4);
+  // 当所有数据都是0时，显示0、1、2、3、4、5、6
+  if (actualMaxValue === 0) {
+    for (let i = 0; i <= 6; i++) {
+      const y = canvas.height - padding.bottom - (i / 6) * chartHeight;
+      ctx.fillText(i.toString(), padding.left - 10, y + 4);
+    }
+  } else {
+    // 有数据时，显示5个刻度点
+    for (let i = 0; i <= 5; i++) {
+      const value = Math.round((maxValue / 5) * i);
+      const y = canvas.height - padding.bottom - (i / 5) * chartHeight;
+      ctx.fillText(value.toString(), padding.left - 10, y + 4);
+    }
   }
 
   // 绘制图例
   const legendY = 15;
-  const legendItems = [
-    { color: '#409eff', label: '使用人次' },
-    { color: '#67c23a', label: '文字AIGC' },
-    { color: '#e6a23c', label: '图片AIGC' }
-  ];
-
-  legendItems.forEach((item, index) => {
-    const x = padding.left + index * 100;
-    ctx.fillStyle = item.color;
-    ctx.beginPath();
-    ctx.moveTo(x, legendY);
-    ctx.lineTo(x + 20, legendY);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(x + 10, legendY, 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#333';
-    ctx.font = '12px Arial';
-    ctx.textAlign = 'left';
-    ctx.fillText(item.label, x + 25, legendY + 4);
-  });
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(padding.left, legendY);
+  ctx.lineTo(padding.left + 20, legendY);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(padding.left + 10, legendY, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#333';
+  ctx.font = '12px Arial';
+  ctx.textAlign = 'left';
+  ctx.fillText(label, padding.left + 25, legendY + 4);
 };
 
-onMounted(() => {
+// 监听statistics变化，当数据加载完成后自动绘制图表
+watch(statistics, (newValue) => {
+  if (newValue && newValue.trend_data) {
+    // 等待DOM更新后绘制图表
+    nextTick(() => {
+      requestAnimationFrame(() => {
+        nextTick(() => {
+          // 延迟一小段时间确保所有canvas元素都已渲染
+          setTimeout(() => {
+            drawAllCharts();
+          }, 100);
+        });
+      });
+    });
+  }
+}, { immediate: false });
+
+onMounted(async () => {
   updateDateTime();
   // 每秒更新一次时间
   setInterval(updateDateTime, 1000);
   
-  loadStatistics();
-  // 每30秒自动刷新统计数据
-  setInterval(loadStatistics, 30000);
+  // 等待DOM完全渲染后再加载统计数据
+  await nextTick();
+  // 使用requestAnimationFrame确保所有元素都已渲染
+  requestAnimationFrame(async () => {
+    await nextTick();
+    // 再次延迟确保canvas元素已渲染
+    setTimeout(async () => {
+      await loadStatistics();
+      // 每30秒自动刷新统计数据
+      setInterval(loadStatistics, 30000);
+    }, 100);
+  });
 });
 </script>
 
 <style scoped>
 .dashboard-container {
-  padding: 20px;
+  padding: 30px;
   min-height: 100vh;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  max-width: 1600px;
+  margin: 0 auto;
 }
 
 .datetime-display {
@@ -539,24 +560,56 @@ onMounted(() => {
 
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(3, 1fr);
   gap: 20px;
   margin-bottom: 30px;
 }
 
+/* 响应式布局 */
+@media (max-width: 1200px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .stat-card {
   background: rgba(255, 255, 255, 0.95);
-  border-radius: 10px;
-  padding: 20px;
+  border-radius: 12px;
+  padding: 24px;
   display: flex;
   align-items: center;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-  transition: transform 0.3s;
+  transition: all 0.3s ease;
+  min-height: 120px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
 }
 
 .stat-card:hover {
   transform: translateY(-5px);
-  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+/* 卡片分组样式 */
+.stat-card-primary {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+  border-left: 4px solid #667eea;
+}
+
+.stat-card-secondary {
+  background: linear-gradient(135deg, rgba(103, 194, 58, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+  border-left: 4px solid #67c23a;
+}
+
+.stat-card-tertiary {
+  background: linear-gradient(135deg, rgba(230, 162, 60, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+  border-left: 4px solid #e6a23c;
 }
 
 .stat-icon {
@@ -592,24 +645,60 @@ onMounted(() => {
 
 .chart-section {
   background: rgba(255, 255, 255, 0.95);
-  border-radius: 10px;
-  padding: 20px;
+  border-radius: 12px;
+  padding: 30px;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  margin-top: 20px;
 }
 
 .chart-section h2 {
-  margin: 0 0 20px 0;
+  margin: 0 0 25px 0;
   color: #333;
-  font-size: 20px;
+  font-size: 24px;
+  font-weight: 600;
+  border-bottom: 2px solid #e0e0e0;
+  padding-bottom: 15px;
+}
+
+.charts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+  margin-top: 20px;
+}
+
+/* 响应式布局 */
+@media (max-width: 1200px) {
+  .charts-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.chart-item {
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 8px;
+  padding: 15px;
+  border: 1px solid #e0e0e0;
+}
+
+.chart-item h3 {
+  margin: 0 0 15px 0;
+  color: #333;
+  font-size: 16px;
+  font-weight: 600;
+  text-align: center;
 }
 
 .chart-container {
   width: 100%;
   height: 300px;
   position: relative;
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 8px;
+  padding: 10px;
 }
 
-#trendChart {
+.chart-container canvas {
   width: 100%;
   height: 100%;
   display: block;

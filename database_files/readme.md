@@ -76,12 +76,16 @@ mysql -u root -p < database_files/init_schema.sql
   - 角色：管理员
   - 昵称：管理员
   - 头像：`/default.jpg`（使用默认头像）
+  - 二级问题：我的身份是？
+  - 二级答案：管理员（SHA-256哈希值：`e10adc3949ba59abbe56e057f20f883e`）
 - **测试用户账户**：
   - 账号：`987654321`（9位数字）
   - 密码：`123456`（SHA-256哈希值：`8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92`）
   - 角色：普通用户
   - 昵称：测试用户
   - 头像：`/default.jpg`（使用默认头像）
+  - 二级问题：我的身份是？
+  - 二级答案：测试用户（SHA-256哈希值：`e10adc3949ba59abbe56e057f20f883e`）
 
 **注意**：
 - 账号字段已从`username`改为`account`
@@ -166,8 +170,9 @@ mysql -u root -p < database_files/init_schema.sql
    - 对话消息 → `qa_messages`
 
 5. **标注任务**：
-   - 标注任务 → `annotation_tasks`（通过 `resource_source` 字段关联不同的资源表）
+   - 标注任务 → `annotation_tasks`（通过 `resource_source` 字段关联不同的资源表；后台每5分钟轮询“待标注”任务自动触发AI标注防遗漏）
    - 标注记录 → `annotation_records`
+   - 审核通过自动迁移：资源入 `cultural_resources`，实体（实体任务）入 `cultural_entities`，图片入 `crawled_images`；若无图片则写入默认图片 `uploads/default.jpg`
 
 ## 密码加密
 

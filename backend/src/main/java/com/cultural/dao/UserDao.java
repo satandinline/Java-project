@@ -22,8 +22,10 @@ public class UserDao {
      * 根据账号查找用户
      */
     public Optional<User> findByAccount(String account) {
+        // 检查字段是否存在，兼容旧数据库
         String sql = "SELECT id, account, password_hash, role, nickname, signature, " +
-                     "avatar_path, security_question, security_answer_hash, created_at " +
+                     "avatar_path, security_question, security_answer_hash, " +
+                     "COALESCE(is_online, 0) as is_online, last_active_time, created_at " +
                      "FROM users WHERE account = ?";
         List<User> users = jdbcTemplate.query(sql, 
                 new BeanPropertyRowMapper<>(User.class), account);
@@ -34,8 +36,10 @@ public class UserDao {
      * 根据ID查找用户
      */
     public Optional<User> findById(Long id) {
+        // 检查字段是否存在，兼容旧数据库
         String sql = "SELECT id, account, password_hash, role, nickname, signature, " +
-                     "avatar_path, security_question, security_answer_hash, created_at " +
+                     "avatar_path, security_question, security_answer_hash, " +
+                     "COALESCE(is_online, 0) as is_online, last_active_time, created_at " +
                      "FROM users WHERE id = ?";
         List<User> users = jdbcTemplate.query(sql, 
                 new BeanPropertyRowMapper<>(User.class), id);
@@ -102,6 +106,47 @@ public class UserDao {
         String sql = "SELECT COUNT(*) FROM users WHERE account = ?";
         Integer count = jdbcTemplate.queryForObject(sql, Integer.class, account);
         return count != null && count > 0;
+    }
+
+    /**
+     * 更新用户在线状态
+     */
+    public void updateOnlineStatus(Long userId, boolean isOnline) {
+        // 检查字段是否存在，如果不存在则跳过更新（兼容旧数据库）
+        try {
+            String sql = "UPDATE users SET is_online = ?, last_active_time = NOW() WHERE id = ?";
+            jdbcTemplate.update(sql, isOnline ? 1 : 0, userId);
+        } catch (Exception e) {
+            // 如果字段不存在，忽略错误（兼容旧数据库）
+            System.out.println("更新在线状态失败（可能字段不存在）: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 更新用户角色
+     */
+    public void updateUserRole(Long userId, String role) {
+        String sql = "UPDATE users SET role = ? WHERE id = ?";
+        jdbcTemplate.update(sql, role, userId);
+    }
+
+    /**
+     * 获取所有用户列表（按指定排序）
+     * 排序规则：在线用户在前，离线用户在后；每类中管理员在前，普通用户在后；同状态同身份按账号升序
+     */
+    public List<User> getAllUsers() {
+        // 兼容旧数据库，如果is_online字段不存在则使用0
+        String sql = "SELECT id, account, password_hash, role, nickname, signature, " +
+                     "avatar_path, security_question, security_answer_hash, " +
+                     "COALESCE(is_online, 0) as is_online, last_active_time, created_at " +
+                     "FROM users " +
+                     "ORDER BY " +
+                     "  CASE WHEN COALESCE(is_online, 0) = 1 THEN 0 ELSE 1 END, " +  // 在线在前
+                     "  CASE WHEN role = '超级管理员' THEN 0 " +
+                     "       WHEN role = '管理员' THEN 1 " +
+                     "       ELSE 2 END, " +  // 超级管理员 > 管理员 > 普通用户
+                     "  account ASC";  // 同状态同身份按账号升序
+        return jdbcTemplate.query(sql, new BeanPropertyRowMapper<>(User.class));
     }
 }
 

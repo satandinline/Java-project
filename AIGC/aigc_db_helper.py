@@ -46,7 +46,8 @@ def save_aigc_text_resource(
     content_text: str,
     source_from: str = "AIGC",
     festival_title: Optional[str] = None,
-    tags: Optional[List[str]] = None
+    tags: Optional[List[str]] = None,
+    retrieved_resource_ids: Optional[List[str]] = None
 ) -> Optional[int]:
     """
     保存AIGC生成的文字资源到AIGC_cultural_resources和AIGC_cultural_entities表
@@ -96,18 +97,24 @@ def save_aigc_text_resource(
             "meta": meta
         }, ensure_ascii=False)
         
+        # 处理检索资源ID（转换为逗号分隔的字符串）
+        retrieved_ids_str = None
+        if retrieved_resource_ids:
+            retrieved_ids_str = ','.join(retrieved_resource_ids)
+        
         # 1. 保存到AIGC_cultural_resources表（title字段存储英文节日名称）
         cursor.execute("""
             INSERT INTO AIGC_cultural_resources 
             (title, resource_type, file_format, source_from, content_feature_data, 
-             version, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, 1, NOW(), NOW())
+             retrieved_resource_ids, version, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, 1, NOW(), NOW())
         """, (
             festival_title_en,  # title字段存储英文节日名称
             "文本",
             "TXT",
             source_from,
-            content_feature_data
+            content_feature_data,
+            retrieved_ids_str  # 检索资源ID列表
         ))
         
         resource_id = cursor.lastrowid

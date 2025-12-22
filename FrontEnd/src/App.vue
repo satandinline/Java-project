@@ -27,6 +27,11 @@
             📊 数据大屏
           </router-link>
           
+          <!-- 用户管理入口（仅超级管理员可见） -->
+          <router-link v-if="isSuperAdmin" to="/users" class="text-link users-link">
+            👥 用户管理
+          </router-link>
+          
           <!-- 用户头像和昵称 -->
           <div class="user-profile">
             <div class="user-profile-content">
@@ -407,6 +412,11 @@ const originalImageSize = ref({ width: 0, height: 0 });
 const currentSecurityQuestion = ref('');
 const oldSecurityAnswer = ref('');
 const securityAnswerVerified = ref(false);
+
+// 注销账号相关
+const showDeleteAccountConfirm = ref(false);
+const deleteAccountPassword = ref('');
+const deleteAccountError = ref('');
 const securityVerifyError = ref('');
 const newSecurityQuestion = ref('');
 const newSecurityAnswer = ref('');
@@ -462,7 +472,11 @@ const isLoggedIn = computed(() => !!userInfo.value);
 
 // 检查是否为管理员（从数据库users表的role字段判断）
 const isAdmin = computed(() => {
-  return userInfo.value && userInfo.value.role === '管理员';
+  return userInfo.value && (userInfo.value.role === '管理员' || userInfo.value.role === '超级管理员');
+});
+
+const isSuperAdmin = computed(() => {
+  return userInfo.value && userInfo.value.role === '超级管理员';
 });
 
 // 监听路由变化
@@ -1261,9 +1275,27 @@ const handleConfirmDeleteAccount = async () => {
   }
 };
 
-const handleLogout = (skipConfirm = false) => {
+const handleLogout = async (skipConfirm = false) => {
   // 退出登录
   if (skipConfirm || confirm('确定要退出登录吗？')) {
+    // 调用后端API更新在线状态
+    if (userInfo.value && userInfo.value.id) {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            user_id: userInfo.value.id
+          })
+        });
+      } catch (e) {
+        console.error('更新在线状态失败:', e);
+        // 即使失败也继续登出流程
+      }
+    }
+    
     userInfo.value = null;
     sessionStorage.removeItem('userInfo');
     showSettingsModal.value = false;
@@ -1286,29 +1318,31 @@ body { margin: 0; font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; bac
 }
 
 .header-content {
-  max-width: 1400px;
+  max-width: 1600px;
   margin: 0 auto;
-  height: 60px;
+  height: 80px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 0 30px;
 }
 
-.logo-text { font-weight: bold; font-size: 18px; color: #333; }
+.logo-text { font-weight: bold; font-size: 20px; color: #333; }
 
 /* 右侧按钮 */
-.right-actions { display: flex; align-items: center; gap: 20px; }
-.text-link { font-size: 14px; color: #666; text-decoration: none; }
-.text-link.router-link-active { font-weight: 600; color: #409eff; }
+.right-actions { display: flex; align-items: center; gap: 24px; }
+.text-link { font-size: 18px; font-weight: 600; color: #666; text-decoration: none; padding: 8px 12px; }
+.text-link.router-link-active { font-weight: 700; color: #409eff; }
 .text-link:hover { color: #333; }
 
 /* 用户头像和昵称 */
 .user-profile {
   position: relative;
   cursor: pointer;
-  padding: 8px 12px;
+  padding: 10px 16px;
   border-radius: 8px;
   transition: background 0.3s;
+  min-width: 100px;
 }
 
 .user-profile:hover {
@@ -1346,15 +1380,18 @@ body { margin: 0; font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; bac
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
 }
 
 .user-nickname {
-  font-size: 12px;
+  font-size: 14px;
   color: #666;
-  font-weight: 400;
+  font-weight: 500;
   text-align: center;
-  max-width: 80px;
+  max-width: 100px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -311,20 +311,40 @@ def create_default_accounts(conn):
     
     password_hash = hashlib.sha256('123456'.encode()).hexdigest()
     
+    # 生成安全问题答案的哈希值
+    admin_answer_hash = hashlib.sha256('管理员'.encode()).hexdigest()
+    test_user_answer_hash = hashlib.sha256('测试用户'.encode()).hexdigest()
+    
+    # 生成超级管理员安全问题答案的哈希值
+    super_admin_answer_hash = hashlib.sha256('超级管理员'.encode()).hexdigest()
+    
     default_accounts = [
+        {
+            'account': '111111111',
+            'password_hash': password_hash,
+            'role': '超级管理员',
+            'nickname': '超级管理员',
+            'avatar_path': '/default.jpg',
+            'security_question': '我的身份是？',
+            'security_answer_hash': super_admin_answer_hash
+        },
         {
             'account': '123456789',
             'password_hash': password_hash,
             'role': '管理员',
             'nickname': '管理员',
-            'avatar_path': '/default.jpg'
+            'avatar_path': '/default.jpg',
+            'security_question': '我的身份是？',
+            'security_answer_hash': admin_answer_hash
         },
         {
             'account': '987654321',
             'password_hash': password_hash,
             'role': '普通用户',
             'nickname': '测试用户',
-            'avatar_path': '/default.jpg'
+            'avatar_path': '/default.jpg',
+            'security_question': '我的身份是？',
+            'security_answer_hash': test_user_answer_hash
         }
     ]
     
@@ -342,19 +362,46 @@ def create_default_accounts(conn):
                     # 如果账号已存在，跳过创建
                     print(f"  账号 {account_info['account']} 已存在，跳过创建")
                 else:
-                    # 创建新账号
-                    cursor.execute("""
-                        INSERT INTO `users` (`account`, `password_hash`, `role`, `nickname`, `signature`, `avatar_path`) 
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                    """, (
-                        account_info['account'],
-                        account_info['password_hash'],
-                        account_info['role'],
-                        account_info['nickname'],
-                        None,  # signature 默认为 NULL
-                        account_info['avatar_path']
-                    ))
-                    print(f"  [OK] 已创建账号: {account_info['account']} ({account_info['nickname']})")
+                    # 尝试使用新字段结构插入（包含is_online和last_active_time）
+                    try:
+                        cursor.execute("""
+                            INSERT INTO `users` (`account`, `password_hash`, `role`, `nickname`, `signature`, `avatar_path`, `security_question`, `security_answer_hash`, `is_online`, `last_active_time`) 
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """, (
+                            account_info['account'],
+                            account_info['password_hash'],
+                            account_info['role'],
+                            account_info['nickname'],
+                            None,  # signature 默认为 NULL
+                            account_info['avatar_path'],
+                            account_info.get('security_question'),
+                            account_info.get('security_answer_hash'),
+                            0,  # is_online默认为0（离线）
+                            None  # last_active_time默认为NULL
+                        ))
+                        print(f"  [OK] 已创建账号: {account_info['account']} ({account_info['nickname']}, 角色: {account_info['role']})")
+                    except Exception as e:
+                        # 如果新字段不存在，使用旧表结构（兼容旧数据库）
+                        error_msg = str(e).lower()
+                        if 'unknown column' in error_msg or 'is_online' in error_msg or 'last_active_time' in error_msg:
+                            print(f"  [WARN] 表结构较旧，使用兼容模式创建账号")
+                            cursor.execute("""
+                                INSERT INTO `users` (`account`, `password_hash`, `role`, `nickname`, `signature`, `avatar_path`, `security_question`, `security_answer_hash`) 
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                            """, (
+                                account_info['account'],
+                                account_info['password_hash'],
+                                account_info['role'],
+                                account_info['nickname'],
+                                None,  # signature 默认为 NULL
+                                account_info['avatar_path'],
+                                account_info.get('security_question'),
+                                account_info.get('security_answer_hash')
+                            ))
+                            print(f"  [OK] 已创建账号: {account_info['account']} ({account_info['nickname']}, 角色: {account_info['role']})")
+                        else:
+                            # 其他错误，抛出异常
+                            raise
         
         conn.commit()
         print("[OK] 默认账号创建完成")
@@ -416,6 +463,8 @@ def main():
             print("[OK] 数据库初始化成功完成！")
             print("=" * 60)
             print("\n默认账户:")
+            print("  超级管理员账号: 111111111")
+            print("  超级管理员密码: 123456")
             print("  管理员账号: 123456789")
             print("  管理员密码: 123456")
             print("  测试用户账号: 987654321")

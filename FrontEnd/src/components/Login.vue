@@ -328,18 +328,73 @@ const handleLogin = async () => {
   errorMessage.value = '';
 
   try {
-    const response = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        account: account.value.trim(),
-        password: password.value
-      })
-    });
+    let response;
+    try {
+      response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          account: account.value.trim(),
+          password: password.value
+        })
+      });
+    } catch (networkError) {
+      // 网络错误：后端服务器可能没有启动或无法连接
+      console.error('网络请求失败:', networkError);
+      errorMessage.value = '网络错误，请检查后端服务器是否启动（端口7200）';
+      isLoading.value = false;
+      return;
+    }
 
-    const result = await response.json();
+    // 检查响应状态
+    if (!response.ok) {
+      // 如果响应不成功，尝试获取错误消息
+      let errorMsg = `登录失败: HTTP ${response.status}`;
+      try {
+        // 先克隆响应，避免读取后无法再次读取
+        const clonedResponse = response.clone();
+        const errorData = await clonedResponse.json();
+        if (errorData && errorData.message) {
+          errorMsg = errorData.message;
+        }
+      } catch (e) {
+        // 如果无法解析JSON，使用状态文本
+        errorMsg = `登录失败: ${response.statusText || `HTTP ${response.status}`}`;
+      }
+      errorMessage.value = errorMsg;
+      isLoading.value = false;
+      return;
+    }
+
+    // 检查响应内容类型
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      errorMessage.value = '服务器返回了非JSON格式的响应，请检查后端服务';
+      isLoading.value = false;
+      return;
+    }
+
+    // 获取响应文本，检查是否为空
+    const responseText = await response.text();
+    if (!responseText || responseText.trim() === '') {
+      errorMessage.value = '服务器返回了空响应，请检查后端服务';
+      isLoading.value = false;
+      return;
+    }
+
+    // 解析JSON
+    let result;
+    try {
+      result = JSON.parse(responseText);
+    } catch (e) {
+      console.error('JSON解析失败:', e);
+      console.error('响应内容:', responseText);
+      errorMessage.value = '服务器返回了无效的JSON数据，请检查后端服务';
+      isLoading.value = false;
+      return;
+    }
 
     if (result.success) {
       // 准备用户信息，保存到sessionStorage（当前会话有效，刷新后会清空，需要重新登录）
@@ -382,7 +437,14 @@ const handleLogin = async () => {
     }
   } catch (error) {
     console.error('登录失败:', error);
-    errorMessage.value = '网络错误，请检查后端服务器是否启动';
+    // 检查是否是网络错误
+    if (error instanceof TypeError && (error.message.includes('fetch') || error.message.includes('Failed to fetch'))) {
+      errorMessage.value = '网络错误，请检查后端服务器是否启动（端口7200）';
+    } else if (error.name === 'NetworkError' || error.message.includes('network')) {
+      errorMessage.value = '网络错误，请检查后端服务器是否启动（端口7200）';
+    } else {
+      errorMessage.value = `登录失败：${error.message || '未知错误'}`;
+    }
   } finally {
     isLoading.value = false;
   }

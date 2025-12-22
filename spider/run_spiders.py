@@ -25,11 +25,11 @@ def main():
     try:
         # 1. 运行中国民族文化资源库爬虫
         print("\n" + "=" * 60)
-        print("1. 运行中国民族文化资源库爬虫")
+        print("1. 运行中国民族文化资源库爬虫（30分钟）")
         print("=" * 60)
         minzu_spider = MinzuFestivalsSpider()
         spiders.append(minzu_spider)
-        minzu_spider.run(max_pages=50)
+        minzu_spider.run()  # 不再限制页面数，改为时间限制
         minzu_spider.close()
         print("✓ 中国民族文化资源库爬虫完成")
         

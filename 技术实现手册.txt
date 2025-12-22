@@ -2,13 +2,37 @@
 公共文化资源管理系统 - 技术实现手册
 ================================================================================
 
-版本：2.0
-更新日期：2025年12月21日
+版本：2.4
+更新日期：2025年12月23日
 
 重要更新：
-- 优化前端性能：为API请求添加10秒超时处理，避免页面一直加载
-- 优化路由守卫逻辑，避免与组件生命周期冲突
-- 改进错误提示信息，帮助用户快速定位问题
+- AIGC功能优化：
+  * 用户发送消息后立即保存到数据库并显示，不等待AI生成完成
+  * 检索资源持久化显示：在AIGC资源表中保存检索资源ID列表，支持折叠/展开查看
+  * 点击检索资源名称可跳转到资源详情页（与首页资源卡片一致）
+  * 检索功能优化：扩展检索范围，支持更多字段（包括用户上传资源表）
+  * AIGC文字资源在首页显示时统一使用 `AIGC_graph/default.jpg` 作为图片路径
+- 资源上传与标注增强：
+  * 文本类型支持直接输入文本内容（无需上传文件）
+  * 支持Word文档（.doc, .docx）和PDF（.pdf）文件上传，自动解析内容
+  * 图像类型仅支持JPG（.jpg）和PNG（.png）格式
+  * 用户可在上传时进行标注（格式与AI标注、人工标注一致）
+- 标注任务系统优化：
+  * 统一标注任务状态：待标注、AI标注中、AI标注完成、已完成
+  * 支持三种资源来源：爬虫抓取、用户上传、AIGC生成
+  * 标注任务中显示资源内容（文本预览或图片）
+  * 权限控制：普通用户只能看到自己上传的资源任务，管理员可看全部
+  * 查看标注：只读模式，不可编辑
+  * 编辑标注：可编辑模式，支持修改所有标注字段
+- 自动补偿与迁移：
+  * 后台每5分钟轮询“待标注”任务，自动触发AI标注防止遗漏
+  * 人工标注审核通过后自动迁移：资源入 `cultural_resources`，实体入 `cultural_entities`，图片入 `crawled_images`
+  * 若无图片，自动在图片表写入默认图片 `uploads/default.jpg`
+- 数据库结构优化：
+  * qa_sessions表添加mode字段（ENUM('text', 'image')）
+  * AIGC_cultural_resources表添加retrieved_resource_ids字段（TEXT，英文逗号分隔）
+  * cultural_resources_from_user和AIGC_cultural_resources表增加storage_path字段
+  * 统一资源存储路径管理
 
 ================================================================================
 一、目录
@@ -46,7 +70,7 @@
 ┌────────┐ ┌──────────┐
 │ MySQL  │ │ Python服务│
 │ 数据库 │ │ (可选，AIGC)│
-│(JDBC)  │ │ Port:8001│
+│(JDBC)  │ │ Port:7200│
 └────────┘ └──────────┘
 
 说明：
@@ -276,10 +300,12 @@ public class UserDao {
 
 Python后端 - PyMySQL连接（爬虫和AIGC使用）
 
-Python模块（爬虫、AIGC）仍使用PyMySQL连接数据库：
+Python模块（爬虫、AIGC）使用PyMySQL连接数据库，统一使用DictCursor确保返回字典格式：
 
 ```python
+from pymysql.cursors import DictCursor
 import pymysql
+
 conn = pymysql.connect(
     host="127.0.0.1",
     port=3306,
@@ -287,9 +313,19 @@ conn = pymysql.connect(
     password="password",
     database="java_project",
     charset="utf8mb4",
-    cursorclass=DictCursor
+    cursorclass=DictCursor  # 统一使用DictCursor，确保返回字典格式
 )
+
+# 在查询时也显式使用DictCursor
+with conn.cursor(DictCursor) as cursor:
+    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+    user = cursor.fetchone()  # 返回字典格式
 ```
+
+重要说明：
+- 所有Python数据库连接统一使用DictCursor，确保查询结果返回字典格式而非元组
+- 在db_connection.py中已统一配置DictCursor
+- 在aigc_api_server.py等模块中显式使用DictCursor确保兼容性
 
 核心功能实现
 
@@ -389,12 +425,61 @@ RAG检索增强生成
 3. 调用图像生成API（Huoshan模型）
 4. 保存生成的图片到本地和数据库
 
-4. 数据关联系统
+4. 资源上传系统
+
+文本资源上传：
+- 支持两种方式：直接输入文本内容或上传文件
+- 文件格式限制：仅支持Word文档（.doc, .docx）或PDF（.pdf）
+- 自动解析文件内容：使用python-docx解析Word文档，PyPDF2解析PDF文档
+- 完整文本内容保存在content_feature_data.content_full中，用于AI标注
+
+图像资源上传：
+- 文件格式限制：仅支持JPG（.jpg）或PNG（.png）
+- 文件存储路径保存在storage_path字段中（相对于项目根目录）
+
+用户标注：
+- 用户可在上传时进行标注，标注格式与AI标注、人工标注完全一致
+- 标注字段包括：实体名称、实体类型、描述、来源、时期年代、地理坐标、文化区域、风格特征、文化价值、相关图像链接、数字资源链接
+- 如果用户提供了标注，会立即保存为人工标注记录，同时仍会触发AI标注
+
+5. 标注任务系统
+
+任务状态流转：
+- 待标注：任务已创建，AI尚未开始
+- AI标注中：AI正在处理资源
+- AI标注完成：AI标注结果已保存
+- 已完成：人工标注完成（包括上传时自标注或任务页上的人工编辑）
+
+资源来源支持：
+- cultural_resources：爬虫抓取的资源
+- cultural_resources_from_user：用户上传的资源
+- AIGC_cultural_resources：AIGC生成的资源
+
+权限控制：
+- 普通用户：只能看到自己上传的资源对应的标注任务
+- 管理员：可以看到所有标注任务（包括爬虫、用户上传、AIGC生成）
+
+资源展示：
+- 文本资源：在标注任务中显示文本内容预览（content_preview）
+- 图像资源：在标注任务中显示图片（通过storage_path或content_feature_data获取文件路径）
+- 前端通过/api/uploads/<filename>接口访问上传的文件
+
+AI标注自动触发：
+- 检测到用户上传资源后，自动创建AI标注任务
+- 对于文本资源，使用完整文本内容（content_full）进行AI标注
+- 对于图像资源，使用图片路径进行视觉理解标注
+
+6. 数据关联系统
 
 文字资源与图片的关联：
 - 爬虫先保存文字资源，获取`resource_id`和`entity_id`
 - 保存图片时，将`resource_id`和`entity_id`写入`crawled_images`表
 - 如果只有图片没有文字，图片的`resource_id`和`entity_id`为NULL
+
+用户上传、AIGC生成与爬虫抓取的统一逻辑：
+- 所有资源类型（爬虫、用户上传、AIGC生成）都通过resource_id关联到cultural_resources表
+- 图像资源统一存储在crawled_images表中，通过resource_id关联
+- 标注任务通过resource_source字段区分资源来源，支持三种来源的统一管理
 
 查询优化：
 - 通过`festival_name`字段快速查询某个节日的所有图片
@@ -864,7 +949,12 @@ Vue.js代码规范
   - 检查：`cd backend && mvn spring-boot:run`
   - 查看控制台是否有启动错误
   - 确认后端服务正常启动后再访问前端
+- Python AIGC服务是否运行（端口7200，如果使用AIGC功能）
+  - 检查：`python AIGC/aigc_api_server.py`
+  - 查看控制台是否有启动错误（注意Unicode编码错误）
+  - 确认服务正常启动后再使用AIGC功能
 - 前端代理配置是否正确（`FrontEnd/vite.config.js`）
+  - 确认代理目标端口为7200（Python后端）或8000（Java后端）
 - 前端请求超时设置（默认10秒）
 - 查看浏览器控制台是否有错误信息
 - 查看后端日志
@@ -897,17 +987,24 @@ Vue.js代码规范
 6. 页面无法打开或一直加载
 
 检查项：
-- 确认后端服务已启动（端口8000）
+- 确认Java后端服务已启动（端口8000）
   - 运行 `cd backend && mvn spring-boot:run`
   - 检查控制台是否有启动成功信息
+- 确认Python AIGC服务已启动（端口7200，如果使用AIGC功能）
+  - 运行 `python AIGC/aigc_api_server.py`
+  - 检查控制台是否有启动成功信息
+  - 注意：如果看到UnicodeEncodeError，说明代码中使用了Windows GBK编码不支持的字符，已修复
 - 检查浏览器控制台错误信息（F12）
   - 如果看到 "Content process isn't responsive"，可能是浏览器资源问题
   - 如果看到 "请求超时"，说明后端服务未运行
+  - 如果看到 "ECONNREFUSED"，说明后端服务未启动或端口配置错误
 - 清除浏览器缓存（Ctrl+Shift+Delete）
 - 检查前端服务是否正常运行（端口5173）
 - 确认网络连接正常
 - 如果后端服务未运行，页面会在10秒后显示超时错误提示
-- 检查端口8000是否被占用：`netstat -ano | findstr :8000`
+- 检查端口占用情况：
+  - Java后端：`netstat -ano | findstr :8000`
+  - Python后端：`netstat -ano | findstr :7200`
 - 尝试使用隐私/无痕模式打开页面
 - 详细排查步骤请参考 `FrontEnd/TROUBLESHOOTING.md`
 
@@ -915,7 +1012,17 @@ Vue.js代码规范
 
 版本历史
 
-v2.0.0 (当前版本) - 2025年12月21日
+v2.4.0 (当前版本) - 2025年12月23日
+
+主要更新：
+- 修复Unicode编码错误（Windows GBK编码兼容性）
+- 修复数据库查询结果格式问题（统一使用DictCursor）
+- Python后端端口更新为7200
+- 优化错误处理和诊断信息
+- 修复statistics_api.py中的datetime变量冲突问题
+- 修复/api/aigc/sessions端点的JSON解析错误
+
+v2.3.0 - 2025年12月22日
 
 主要特性：
 - 用户注册/登录（自动生成账号）
@@ -926,7 +1033,7 @@ v2.0.0 (当前版本) - 2025年12月21日
 
 技术栈：
 - Java后端：Spring Boot 3.2.0 + JDBC + MySQL 8.0+
-- Python服务：Flask（AIGC功能）
+- Python服务：Flask（AIGC功能，端口7200）
 - 前端：Vue.js 3 + Vite
 
 ================================================================================

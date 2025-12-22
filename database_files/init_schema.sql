@@ -33,12 +33,14 @@ CREATE TABLE IF NOT EXISTS `users` (
   `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
   `account` VARCHAR(20) UNIQUE NOT NULL COMMENT '用户账号（8-10位数字，系统自动生成，永久不可修改）',
   `password_hash` VARCHAR(255) NOT NULL COMMENT '加密后的密码',
-  `role` ENUM('普通用户', '管理员') NOT NULL DEFAULT '普通用户' COMMENT '角色（普通用户或系统管理员）',
+  `role` ENUM('普通用户', '管理员', '超级管理员') NOT NULL DEFAULT '普通用户' COMMENT '角色（普通用户、系统管理员或超级管理员）',
   `nickname` VARCHAR(100) COMMENT '用户昵称（可修改）',
   `signature` VARCHAR(500) COMMENT '个人签名（可修改）',
   `avatar_path` VARCHAR(255) DEFAULT '/default.jpg' COMMENT '头像路径（存储在public文件夹，格式：/账号.jpg 或 /default.jpg）',
   `security_question` VARCHAR(255) COMMENT '自定义安全问题（用于找回密码）',
   `security_answer_hash` VARCHAR(255) COMMENT '安全问题的答案（哈希值）',
+  `is_online` TINYINT(1) DEFAULT 0 COMMENT '是否在线（0：离线，1：在线）',
+  `last_active_time` TIMESTAMP NULL DEFAULT NULL COMMENT '最后活跃时间',
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '注册时间',
   INDEX `idx_account` (`account`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
@@ -168,7 +170,10 @@ CREATE TABLE IF NOT EXISTS `qa_sessions` (
   `user_id` BIGINT NOT NULL COMMENT '用户ID',
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '会话开始时间',
   `summary` TEXT COMMENT '会话摘要（用于上下文管理）',
-  FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
+  `mode` ENUM('text', 'image') DEFAULT 'text' COMMENT '会话模式（text或image）',
+  FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+  INDEX `idx_user_id` (`user_id`),
+  INDEX `idx_mode` (`mode`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='问答会话表';
 
 
@@ -208,14 +213,17 @@ CREATE TABLE IF NOT EXISTS `qa_messages` (
 CREATE TABLE IF NOT EXISTS `annotation_tasks` (
   `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
   `resource_id` BIGINT COMMENT '关联的资源ID',
-  `resource_source` ENUM('cultural_resources', 'cultural_resources_from_user') DEFAULT 'cultural_resources' COMMENT '资源来源表（cultural_resources或cultural_resources_from_user）',
+  `resource_source` ENUM('cultural_resources', 'cultural_resources_from_user', 'AIGC_cultural_resources') DEFAULT 'cultural_resources' COMMENT '资源来源表（cultural_resources、cultural_resources_from_user或AIGC_cultural_resources）',
   `task_type` ENUM('实体', '质量', '语义') COMMENT '任务体系（实体、质量、语义）',
   `annotation_method` ENUM('ai', 'manual') DEFAULT 'ai' COMMENT '标注方式',
-  `status` VARCHAR(20) DEFAULT '待标注' COMMENT '任务状态（如：待标注, 待审核, 已完成）',
+  `status` VARCHAR(20) DEFAULT '待标注' COMMENT '任务状态（待标注、AI标注中、AI标注完成、已完成）',
   `required_annotators` INT DEFAULT 1 COMMENT '需要的标注人数',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '任务创建时间',
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '任务更新时间',
   INDEX `idx_resource` (`resource_id`),
   INDEX `idx_status` (`status`),
-  INDEX `idx_resource_source` (`resource_source`)
+  INDEX `idx_resource_source` (`resource_source`),
+  INDEX `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='标注任务表';
 
 
@@ -267,17 +275,21 @@ CREATE TABLE IF NOT EXISTS `annotation_records` (
 CREATE TABLE IF NOT EXISTS `cultural_resources_from_user` (
   `id` BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '唯一主键',
   `user_id` BIGINT NOT NULL COMMENT '上传用户ID',
-  `title` VARCHAR(255) COMMENT '节日',
+  `title` VARCHAR(255) COMMENT '节日（文化资源涉及到的传统节日的名称）',
   `resource_type` VARCHAR(50) COMMENT '资源类型（文本、图像、视频、数据态资源、虚拟展示资源等。数据态资源：用于AI分析的原始数据集；虚拟展示资源：全景图像、3D模型文件等）',
   `file_format` VARCHAR(20) COMMENT '文件格式（如：TXT, JPG, MP4, OBJ, GLB等）',
-  `content_feature_data` LONGTEXT COMMENT '存储用于知识图谱构建的实体向量或AI提取的语义特征（数据赋能）',
+  `content_feature_data` LONGTEXT COMMENT '存储用于知识图谱构建的实体向量或AI提取的语义特征（数据赋能），包含文件路径、文本内容等信息',
   `content_hash` VARCHAR(64) COMMENT '内容的SHA-256哈希，用于快速查重',
+  `storage_path` VARCHAR(767) COMMENT '文件存储路径（相对于项目根目录，如uploads/xxx.jpg）',
   `ai_review_status` ENUM('pending', 'passed', 'failed') NOT NULL DEFAULT 'pending' COMMENT 'AI审核状态',
   `manual_review_status` ENUM('pending', 'passed', 'failed') NOT NULL DEFAULT 'pending' COMMENT '人工审核状态',
   `upload_time` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '上传时间',
   `review_notes` TEXT COMMENT '审核备注（例如：未通过原因）',
   FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
-  UNIQUE KEY `uk_content_hash` (`content_hash`) COMMENT '哈希唯一索引，防止重复上传'
+  UNIQUE KEY `uk_content_hash` (`content_hash`) COMMENT '哈希唯一索引，防止重复上传',
+  INDEX `idx_user_id` (`user_id`),
+  INDEX `idx_upload_time` (`upload_time`),
+  INDEX `idx_storage_path` (`storage_path`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户上传资源待审表';
 
 
@@ -295,10 +307,14 @@ CREATE TABLE IF NOT EXISTS `AIGC_cultural_resources` (
   `file_format` VARCHAR(20) COMMENT '文件格式（如：TXT, JPG, MP4, OBJ, GLB等）',
   `source_from` VARCHAR(255) COMMENT '数据来源（例如：AIGC模型名称）',
   `source_url` TEXT COMMENT '原始URL链接 (如果适用)',
-  `content_feature_data` LONGTEXT COMMENT '存储用于知识图谱构建的实体向量或AI提取的语义特征（数据赋能）',
+  `content_feature_data` LONGTEXT COMMENT '存储用于知识图谱构建的实体向量或AI提取的语义特征（数据赋能），包含文件路径、文本内容等信息',
+  `storage_path` VARCHAR(767) COMMENT '文件存储路径（相对于项目根目录，如AIGC_graph/xxx.jpg）',
+  `retrieved_resource_ids` TEXT COMMENT '检索到的资源ID列表（英文逗号分隔，用于持久化显示检索结果）',
   `version` INT DEFAULT 1 COMMENT '版本号',
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后更新时间'
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后更新时间',
+  INDEX `idx_storage_path` (`storage_path`),
+  INDEX `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AIGC生成的文化资源表';
 
 
@@ -964,8 +980,58 @@ UPDATE `annotation_tasks`
 SET `resource_source` = 'cultural_resources' 
 WHERE `resource_source` IS NULL OR `resource_source` = '';
 
+-- --------------------------------------------------
+-- 更新现有数据库结构（兼容已有数据）
+-- --------------------------------------------------
 
+-- 更新users表的role ENUM，添加'超级管理员'选项（如果不存在）
+SET @enum_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.COLUMNS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'users' 
+    AND COLUMN_NAME = 'role'
+    AND COLUMN_TYPE LIKE "%'超级管理员'%"
+);
+SET @sql = IF(@enum_exists = 0,
+    'ALTER TABLE `users` MODIFY COLUMN `role` ENUM(\'普通用户\', \'管理员\', \'超级管理员\') NOT NULL DEFAULT \'普通用户\' COMMENT \'角色（普通用户、系统管理员或超级管理员）\'',
+    'SELECT "role ENUM已包含超级管理员，跳过更新"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
+-- 添加is_online字段（如果不存在）
+SET @column_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.COLUMNS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'users' 
+    AND COLUMN_NAME = 'is_online'
+);
+SET @sql = IF(@column_exists = 0,
+    'ALTER TABLE `users` ADD COLUMN `is_online` TINYINT(1) DEFAULT 0 COMMENT \'是否在线（0：离线，1：在线）\' AFTER `security_answer_hash`',
+    'SELECT "is_online字段已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- 添加last_active_time字段（如果不存在）
+SET @column_exists = (
+    SELECT COUNT(*) 
+    FROM information_schema.COLUMNS 
+    WHERE TABLE_SCHEMA = 'java_project' 
+    AND TABLE_NAME = 'users' 
+    AND COLUMN_NAME = 'last_active_time'
+);
+SET @sql = IF(@column_exists = 0,
+    'ALTER TABLE `users` ADD COLUMN `last_active_time` TIMESTAMP NULL DEFAULT NULL COMMENT \'最后活跃时间\' AFTER `is_online`',
+    'SELECT "last_active_time字段已存在，跳过添加"'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
 -- --------------------------------------------------
 -- 注意：
@@ -973,4 +1039,5 @@ WHERE `resource_source` IS NULL OR `resource_source` = '';
 -- 2. cultural_resources表的外键约束已在CREATE TABLE中定义，无需ALTER TABLE
 -- 3. annotation_records表的扁平化字段已在CREATE TABLE中定义，无需ALTER TABLE
 -- 4. annotation_tasks表的resource_source字段已在CREATE TABLE中定义，无需ALTER TABLE
+-- 5. users表的role ENUM、is_online和last_active_time字段已通过上面的ALTER TABLE更新
 -- --------------------------------------------------

@@ -6,7 +6,9 @@
       <select v-model="statusFilter" @change="fetchTasks">
         <option value="">所有状态</option>
         <option value="待标注">待标注</option>
-        <option value="已标注">已标注</option>
+        <option value="AI标注中">AI标注中</option>
+        <option value="AI标注完成">AI标注完成</option>
+        <option value="已完成">已完成</option>
       </select>
     </div>
     
@@ -21,26 +23,30 @@
           <p>资源类型: {{ task.resource_type }}</p>
           <p>任务类型: {{ task.task_type }}</p>
           <p>标注方式: {{ task.annotation_method === 'ai' ? 'AI标注' : '人工标注' }}</p>
+          <p v-if="task.original_file_name">文件名: {{ task.original_file_name }}</p>
+          <p v-if="task.content_preview && task.resource_type === '文本'">
+            文本预览: {{ task.content_preview.slice(0, 60) }}{{ task.content_preview.length > 60 ? '...' : '' }}
+          </p>
         </div>
         
         <div class="task-actions">
           <button @click="viewAnnotation(task.id)">查看标注</button>
           <button 
             @click="editAnnotation(task.id)" 
-            v-if="task.status === '已标注'"
+            v-if="task.status !== 'AI标注中'"
           >
             编辑标注
           </button>
           <button 
             @click="approveAnnotation(task.id)" 
-            v-if="task.status === '已标注' && isAdmin"
+            v-if="task.status === '已完成' && isAdmin"
             class="approve-btn"
           >
             审核通过
           </button>
           <button 
             @click="rejectAnnotation(task.id)" 
-            v-if="task.status === '已标注' && isAdmin"
+            v-if="task.status === '已完成' && isAdmin"
             class="reject-btn"
           >
             驳回
@@ -49,11 +55,23 @@
       </div>
     </div>
     
-    <!-- 标注编辑弹窗 -->
-    <div class="modal" v-if="showAnnotationModal">
-      <div class="modal-content">
+    <!-- 标注查看/编辑弹窗 -->
+    <div class="modal" v-if="showAnnotationModal" @click.self="closeAnnotationModal">
+      <div class="modal-content" @click.stop>
         <span class="close-btn" @click="closeAnnotationModal">&times;</span>
-        <h3>标注编辑</h3>
+        <h3>{{ isViewMode ? '查看标注' : '编辑标注' }}</h3>
+        
+        <!-- 左侧：资源内容预览 -->
+        <div class="resource-preview" v-if="currentResourceTitle || currentResourceContent || currentResourceImageUrl">
+          <h4>资源预览</h4>
+          <p v-if="currentResourceTitle"><strong>标题：</strong>{{ currentResourceTitle }}</p>
+          <div v-if="currentResourceType === '文本' && currentResourceContent" class="resource-text">
+            {{ currentResourceContent }}
+          </div>
+          <div v-if="currentResourceType === '图像' && currentResourceImageUrl" class="resource-image-wrapper">
+            <img :src="currentResourceImageUrl" alt="资源图片预览" class="resource-image" />
+          </div>
+        </div>
         
         <div class="annotation-content">
           <div v-if="currentAnnotation">
@@ -65,13 +83,15 @@
                 type="text" 
                 v-model="currentAnnotation.entity_name" 
                 placeholder="请输入实体名称"
+                :readonly="isViewMode"
+                :disabled="isViewMode"
                 required
               >
             </div>
             
             <div class="form-group">
               <label>实体类型 *</label>
-              <select v-model="currentAnnotation.entity_type">
+              <select v-model="currentAnnotation.entity_type" :disabled="isViewMode">
                 <option value="人物">人物</option>
                 <option value="作品">作品</option>
                 <option value="事件">事件</option>
@@ -86,6 +106,8 @@
                 v-model="currentAnnotation.description"
                 placeholder="请输入实体描述..."
                 rows="3"
+                :readonly="isViewMode"
+                :disabled="isViewMode"
               ></textarea>
             </div>
             
@@ -95,6 +117,8 @@
                 type="text" 
                 v-model="currentAnnotation.source" 
                 placeholder="请输入来源信息"
+                :readonly="isViewMode"
+                :disabled="isViewMode"
               >
             </div>
             
@@ -105,6 +129,8 @@
                   type="text" 
                   v-model="currentAnnotation.period_era" 
                   placeholder="例如：唐代、明清"
+                  :readonly="isViewMode"
+                  :disabled="isViewMode"
                 >
               </div>
               
@@ -114,6 +140,8 @@
                   type="text" 
                   v-model="currentAnnotation.geo_coordinates" 
                   placeholder="例如：经度,纬度"
+                  :readonly="isViewMode"
+                  :disabled="isViewMode"
                 >
               </div>
             </div>
@@ -124,6 +152,8 @@
                 type="text" 
                 v-model="currentAnnotation.cultural_region" 
                 placeholder="例如：华北、江南"
+                :readonly="isViewMode"
+                :disabled="isViewMode"
               >
             </div>
             
@@ -133,6 +163,8 @@
                 v-model="currentAnnotation.style_features"
                 placeholder="请输入风格特征..."
                 rows="2"
+                :readonly="isViewMode"
+                :disabled="isViewMode"
               ></textarea>
             </div>
             
@@ -142,6 +174,8 @@
                 v-model="currentAnnotation.cultural_value"
                 placeholder="请输入文化价值..."
                 rows="2"
+                :readonly="isViewMode"
+                :disabled="isViewMode"
               ></textarea>
             </div>
             
@@ -151,6 +185,8 @@
                 type="text" 
                 v-model="currentAnnotation.related_images_url" 
                 placeholder="请输入图像URL"
+                :readonly="isViewMode"
+                :disabled="isViewMode"
               >
             </div>
             
@@ -160,12 +196,17 @@
                 type="text" 
                 v-model="currentAnnotation.digital_resource_link" 
                 placeholder="请输入数字资源URL"
+                :readonly="isViewMode"
+                :disabled="isViewMode"
               >
             </div>
             
-            <div class="annotation-actions">
+            <div class="annotation-actions" v-if="!isViewMode">
               <button class="save-annotation-btn" @click="saveAnnotation">保存标注</button>
               <button class="cancel-btn" @click="closeAnnotationModal">取消</button>
+            </div>
+            <div class="annotation-actions" v-else>
+              <button class="cancel-btn" @click="closeAnnotationModal">关闭</button>
             </div>
           </div>
         </div>
@@ -181,8 +222,14 @@ const tasks = ref([]);
 const statusFilter = ref('');
 const showAnnotationModal = ref(false);
 const currentTaskId = ref(null);
+const isViewMode = ref(false); // 是否为查看模式（只读）
 // 检查是否为管理员
 const isAdmin = ref(false);
+const currentResourceTitle = ref('');
+const currentResourceType = ref('');
+const currentResourceContent = ref('');
+const currentResourceImageUrl = ref('');
+
 const currentAnnotation = ref({
   // 新字段结构
   entity_name: '',
@@ -204,7 +251,7 @@ onMounted(() => {
   fetchTasks();
   // 检查用户角色
   const userInfo = JSON.parse(localStorage.getItem('userInfo'));
-  isAdmin.value = userInfo && userInfo.role === '管理员';
+  isAdmin.value = userInfo && (userInfo.role === '管理员' || userInfo.role === '超级管理员');
 });
 
 const fetchTasks = async () => {
@@ -258,9 +305,15 @@ const viewAnnotation = async (taskId) => {
     const data = await response.json();
     if (data.success) {
       currentTaskId.value = taskId;
+      isViewMode.value = true; // 查看模式
       
       // 处理新格式数据
       const annotations = data.annotations || {};
+      currentResourceTitle.value = data.title || '';
+      currentResourceType.value = data.resource_type || '';
+      currentResourceContent.value = data.resource_content || '';
+      currentResourceImageUrl.value = data.resource_image_url || '';
+
       currentAnnotation.value = {
         entity_name: annotations.entity_name || '',
         entity_type: annotations.entity_type || '其他',
@@ -287,13 +340,61 @@ const viewAnnotation = async (taskId) => {
   }
 };
 
-const editAnnotation = (taskId) => {
-  viewAnnotation(taskId);
+const editAnnotation = async (taskId) => {
+  try {
+    const userInfo = JSON.parse(localStorage.getItem('userInfo'));
+    const response = await fetch(`/api/annotation/tasks/${taskId}/details`, {
+      headers: {
+        'X-User-Id': userInfo.id.toString()
+      }
+    });
+    
+    const data = await response.json();
+    if (data.success) {
+      currentTaskId.value = taskId;
+      isViewMode.value = false; // 编辑模式
+      
+      // 处理新格式数据
+      const annotations = data.annotations || {};
+      currentResourceTitle.value = data.title || '';
+      currentResourceType.value = data.resource_type || '';
+      currentResourceContent.value = data.resource_content || '';
+      currentResourceImageUrl.value = data.resource_image_url || '';
+
+      currentAnnotation.value = {
+        entity_name: annotations.entity_name || '',
+        entity_type: annotations.entity_type || '其他',
+        description: annotations.description || '',
+        source: annotations.source || '',
+        period_era: annotations.period_era || '',
+        geo_coordinates: annotations.geo_coordinates || '',
+        cultural_region: annotations.cultural_region || '',
+        style_features: annotations.style_features || '',
+        cultural_value: annotations.cultural_value || '',
+        related_images_url: annotations.related_images_url || '',
+        digital_resource_link: annotations.digital_resource_link || '',
+        // 兼容旧格式
+        entities: annotations.entities || []
+      };
+      
+      showAnnotationModal.value = true;
+    } else {
+      alert('获取标注详情失败: ' + data.message);
+    }
+  } catch (error) {
+    console.error('获取标注详情失败:', error);
+    alert('获取标注详情失败');
+  }
 };
 
 const closeAnnotationModal = () => {
   showAnnotationModal.value = false;
   currentTaskId.value = null;
+  isViewMode.value = false;
+  currentResourceTitle.value = '';
+  currentResourceType.value = '';
+  currentResourceContent.value = '';
+  currentResourceImageUrl.value = '';
   currentAnnotation.value = {
     entity_name: '',
     entity_type: '其他',
@@ -467,8 +568,16 @@ const saveAnnotation = async () => {
   background-color: #f5a623;
 }
 
-.task-status.已标注 {
+.task-status.AI标注中 {
+  background-color: #1890ff;
+}
+
+.task-status.AI标注完成 {
   background-color: #42b983;
+}
+
+.task-status.已完成 {
+  background-color: #722ed1;
 }
 
 .task-info p {
@@ -521,8 +630,17 @@ const saveAnnotation = async () => {
   position: absolute;
   top: 15px;
   right: 20px;
-  font-size: 24px;
+  font-size: 28px;
   cursor: pointer;
+  color: #666;
+  z-index: 1000;
+  line-height: 1;
+  padding: 5px;
+  transition: color 0.2s;
+}
+
+.close-btn:hover {
+  color: #000;
 }
 
 .entity-item {
@@ -599,6 +717,14 @@ const saveAnnotation = async () => {
   font-size: 14px;
 }
 
+.form-group input[type="text"]:disabled,
+.form-group textarea:disabled,
+.form-group select:disabled {
+  background-color: #f5f5f5;
+  cursor: not-allowed;
+  color: #666;
+}
+
 .form-group textarea {
   resize: vertical;
   min-height: 60px;
@@ -608,6 +734,35 @@ const saveAnnotation = async () => {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 15px;
+}
+
+.resource-preview {
+  margin-bottom: 20px;
+  padding: 10px;
+  border-radius: 6px;
+  background-color: #fafafa;
+  border: 1px solid #eee;
+}
+
+.resource-text {
+  margin-top: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.resource-image-wrapper {
+  margin-top: 10px;
+  text-align: center;
+}
+
+.resource-image {
+  max-width: 100%;
+  max-height: 260px;
+  border-radius: 4px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.15);
 }
 
 .annotation-actions {

@@ -3,6 +3,7 @@ from typing import Dict, Optional
 import hashlib
 from dotenv import load_dotenv
 import sys
+from pymysql.cursors import DictCursor
 
 # 添加项目根目录到路径，以便导入db_connection
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -91,7 +92,7 @@ class AuthSystem:
             return {"success": False, "message": "数据库连接失败"}
         
         try:
-            with conn.cursor() as cursor:
+            with conn.cursor(DictCursor) as cursor:
                 # 生成唯一的账号（8-10位数字）
                 max_attempts = 100  # 最多尝试100次生成唯一账号
                 account = None
@@ -155,7 +156,8 @@ class AuthSystem:
             return {"success": False, "message": "数据库连接失败"}
         
         try:
-            with conn.cursor() as cursor:
+            # 显式使用DictCursor确保返回字典格式
+            with conn.cursor(DictCursor) as cursor:
                 # 查询用户（使用account字段）
                 cursor.execute(
                     "SELECT id, account, password_hash, role, nickname, signature, avatar_path FROM users WHERE account = %s",
@@ -166,20 +168,52 @@ class AuthSystem:
                 if not user:
                     return {"success": False, "message": "账号不存在，请先注册"}
                 
+                # 确保user是字典格式
+                if not isinstance(user, dict):
+                    print(f"警告：查询结果不是字典格式，类型：{type(user)}")
+                    # 如果是元组，尝试转换为字典
+                    if isinstance(user, tuple):
+                        columns = ['id', 'account', 'password_hash', 'role', 'nickname', 'signature', 'avatar_path']
+                        user = dict(zip(columns, user))
+                    else:
+                        return {"success": False, "message": "数据库查询结果格式错误"}
+                
                 # 验证密码
                 password_hash = self._hash_password(password)
-                if user["password_hash"] != password_hash:
+                stored_password_hash = user.get("password_hash")
+                if not stored_password_hash:
+                    return {"success": False, "message": "用户数据异常，密码哈希不存在"}
+                
+                if stored_password_hash != password_hash:
                     return {"success": False, "message": "密码错误，请重新尝试"}
+                
+                # 更新用户在线状态和最后活跃时间
+                user_id = user.get("id")
+                if not user_id:
+                    return {"success": False, "message": "用户数据异常，用户ID不存在"}
+                
+                try:
+                    cursor.execute("""
+                        UPDATE users 
+                        SET is_online = 1, last_active_time = NOW() 
+                        WHERE id = %s
+                    """, (user_id,))
+                    conn.commit()
+                except Exception as e:
+                    print(f"更新在线状态失败: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # 即使更新失败也继续登录流程
                 
                 # 返回用户信息（包含昵称、个人签名和头像）
                 avatar_path = user.get("avatar_path")
                 if not avatar_path or avatar_path == './default.jpg':
                     avatar_path = '/default.jpg'
                 user_info = {
-                    "id": user["id"],
-                    "account": user["account"],
-                    "role": user["role"],
-                    "nickname": user.get("nickname", user["account"]),
+                    "id": user.get("id"),
+                    "account": user.get("account"),
+                    "role": user.get("role", "普通用户"),
+                    "nickname": user.get("nickname") or user.get("account"),
                     "signature": user.get("signature"),
                     "avatar_path": avatar_path
                 }
@@ -190,9 +224,12 @@ class AuthSystem:
                 }
         except Exception as e:
             print(f"登录失败: {e}")
+            import traceback
+            traceback.print_exc()
             return {"success": False, "message": f"登录失败：{str(e)}"}
         finally:
-            conn.close()
+            if conn:
+                conn.close()
 
     def get_user_by_id(self, user_id: int) -> Optional[Dict]:
         """根据用户ID获取用户信息"""
@@ -201,18 +238,25 @@ class AuthSystem:
             return None
         
         try:
-            with conn.cursor() as cursor:
+            with conn.cursor(DictCursor) as cursor:
                 cursor.execute(
                     "SELECT id, account, role, nickname, signature, avatar_path, security_question FROM users WHERE id = %s",
                     (user_id,)
                 )
                 user = cursor.fetchone()
                 if user:
+                    # 确保user是字典格式
+                    if not isinstance(user, dict):
+                        if isinstance(user, tuple):
+                            columns = ['id', 'account', 'role', 'nickname', 'signature', 'avatar_path', 'security_question']
+                            user = dict(zip(columns, user))
+                        else:
+                            return None
                     return {
-                        "id": user["id"],
-                        "account": user["account"],
-                        "role": user["role"],
-                        "nickname": user.get("nickname", user["account"]),
+                        "id": user.get("id"),
+                        "account": user.get("account"),
+                        "role": user.get("role"),
+                        "nickname": user.get("nickname") or user.get("account"),
                         "signature": user.get("signature"),
                         "avatar_path": user.get("avatar_path", "./default.jpg"),
                         "security_question": user.get("security_question")
@@ -237,7 +281,7 @@ class AuthSystem:
             return {"success": False, "message": "数据库连接失败"}
         
         try:
-            with conn.cursor() as cursor:
+            with conn.cursor(DictCursor) as cursor:
                 # 检查用户是否存在
                 cursor.execute("SELECT id FROM users WHERE id = %s", (user_id,))
                 if not cursor.fetchone():
@@ -265,18 +309,26 @@ class AuthSystem:
             return None
         
         try:
-            with conn.cursor() as cursor:
+            with conn.cursor(DictCursor) as cursor:
                 cursor.execute(
                     "SELECT id, security_question FROM users WHERE account = %s",
                     (account,)
                 )
                 user = cursor.fetchone()
-                if user and user.get("security_question"):
-                    return {
-                        "success": True,
-                        "user_id": user["id"],
-                        "security_question": user["security_question"]
-                    }
+                if user:
+                    # 确保user是字典格式
+                    if not isinstance(user, dict):
+                        if isinstance(user, tuple):
+                            columns = ['id', 'security_question']
+                            user = dict(zip(columns, user))
+                        else:
+                            return {"success": False, "message": "数据库查询结果格式错误"}
+                    if user.get("security_question"):
+                        return {
+                            "success": True,
+                            "user_id": user.get("id"),
+                            "security_question": user.get("security_question")
+                        }
                 return {"success": False, "message": "该用户未设置安全问题"}
         except Exception as e:
             print(f"获取安全问题失败: {e}")
@@ -291,7 +343,7 @@ class AuthSystem:
             return {"success": False, "message": "数据库连接失败"}
         
         try:
-            with conn.cursor() as cursor:
+            with conn.cursor(DictCursor) as cursor:
                 cursor.execute(
                     "SELECT id, security_answer_hash FROM users WHERE account = %s",
                     (account,)
@@ -300,13 +352,21 @@ class AuthSystem:
                 if not user:
                     return {"success": False, "message": "用户不存在"}
                 
+                # 确保user是字典格式
+                if not isinstance(user, dict):
+                    if isinstance(user, tuple):
+                        columns = ['id', 'security_answer_hash']
+                        user = dict(zip(columns, user))
+                    else:
+                        return {"success": False, "message": "数据库查询结果格式错误"}
+                
                 if not user.get("security_answer_hash"):
                     return {"success": False, "message": "该用户未设置安全问题"}
                 
                 # 验证答案
                 answer_hash = self._hash_password(answer)
-                if answer_hash == user["security_answer_hash"]:
-                    return {"success": True, "user_id": user["id"]}
+                if answer_hash == user.get("security_answer_hash"):
+                    return {"success": True, "user_id": user.get("id")}
                 else:
                     return {"success": False, "message": "答案错误"}
         except Exception as e:
@@ -325,7 +385,7 @@ class AuthSystem:
             return {"success": False, "message": "数据库连接失败"}
         
         try:
-            with conn.cursor() as cursor:
+            with conn.cursor(DictCursor) as cursor:
                 # 检查用户是否存在
                 cursor.execute("SELECT id FROM users WHERE account = %s", (account,))
                 user = cursor.fetchone()
@@ -358,7 +418,7 @@ class AuthSystem:
             return {"success": False, "message": "数据库连接失败"}
         
         try:
-            with conn.cursor() as cursor:
+            with conn.cursor(DictCursor) as cursor:
                 # 获取用户信息
                 cursor.execute(
                     "SELECT password_hash FROM users WHERE id = %s",
@@ -368,9 +428,17 @@ class AuthSystem:
                 if not user:
                     return {"success": False, "message": "用户不存在"}
                 
+                # 确保user是字典格式
+                if not isinstance(user, dict):
+                    if isinstance(user, tuple):
+                        columns = ['password_hash']
+                        user = dict(zip(columns, user))
+                    else:
+                        return {"success": False, "message": "数据库查询结果格式错误"}
+                
                 # 验证旧密码
                 old_password_hash = self._hash_password(old_password)
-                if old_password_hash != user["password_hash"]:
+                if old_password_hash != user.get("password_hash"):
                     return {"success": False, "message": "旧密码错误"}
                 
                 # 更新密码
@@ -396,7 +464,7 @@ class AuthSystem:
             return {"success": False, "message": "数据库连接失败"}
         
         try:
-            with conn.cursor() as cursor:
+            with conn.cursor(DictCursor) as cursor:
                 # 获取用户的安全问题答案
                 cursor.execute(
                     "SELECT security_answer_hash FROM users WHERE id = %s",
@@ -406,12 +474,20 @@ class AuthSystem:
                 if not user:
                     return {"success": False, "message": "用户不存在"}
                 
+                # 确保user是字典格式
+                if not isinstance(user, dict):
+                    if isinstance(user, tuple):
+                        columns = ['security_answer_hash']
+                        user = dict(zip(columns, user))
+                    else:
+                        return {"success": False, "message": "数据库查询结果格式错误"}
+                
                 if not user.get("security_answer_hash"):
                     return {"success": False, "message": "用户未设置安全问题"}
                 
                 # 验证答案
                 answer_hash = self._hash_password(answer)
-                if answer_hash == user["security_answer_hash"]:
+                if answer_hash == user.get("security_answer_hash"):
                     return {"success": True, "message": "验证成功"}
                 else:
                     return {"success": False, "message": "答案错误"}
@@ -428,7 +504,7 @@ class AuthSystem:
             return {"success": False, "message": "数据库连接失败"}
         
         try:
-            with conn.cursor() as cursor:
+            with conn.cursor(DictCursor) as cursor:
                 # 检查用户是否已设置安全问题
                 cursor.execute(
                     "SELECT security_question, security_answer_hash FROM users WHERE id = %s",

@@ -52,9 +52,10 @@ class MinzuFestivalsSpider:
         self.current_festival_image_count = 0  # 当前节日已保存的图片数量
         self.current_festival_name = None  # 当前节日的名称
         
-        # 数量限制（统一限制资源数量，每个资源包含文字和图片）
-        self.max_resources = 20  # 最大资源数量（每个资源包含文字和图片）
-        self.resources_count = 0  # 已爬取的资源数量
+        # 时间限制（30分钟）
+        self.max_duration = 30 * 60  # 最大爬取时间（秒）：30分钟
+        self.start_time = None  # 爬取开始时间
+        self.resources_count = 0  # 已爬取的资源数量（用于统计）
         
         # 确保crawled_images文件夹存在
         os.makedirs(CRAWLED_IMAGES_DIR, exist_ok=True)
@@ -899,9 +900,9 @@ class MinzuFestivalsSpider:
         if url in self.visited_urls:
             return []
         
-        # 检查是否达到资源数量限制
-        if self.resources_count >= self.max_resources:
-            print(f"已达到资源数量限制（{self.resources_count}/{self.max_resources}），停止爬取")
+        # 检查是否超过时间限制
+        if self.start_time and (time.time() - self.start_time) >= self.max_duration:
+            print(f"已达到时间限制（30分钟），停止爬取")
             return []
         
         self.visited_urls.add(url)
@@ -991,8 +992,9 @@ class MinzuFestivalsSpider:
                 resource_title = h1_tag.get_text().strip() if h1_tag else ''
             content_text = self._extract_text_content(html_content)
             
-            # 检查是否达到资源数量限制
-            if self.resources_count >= self.max_resources:
+            # 检查是否超过时间限制
+            if self.start_time and (time.time() - self.start_time) >= self.max_duration:
+                print(f"已达到时间限制（30分钟），停止爬取")
                 return []
             
             # 先保存文字数据（即使没有图片也要保存，只要文本内容足够）
@@ -1075,11 +1077,12 @@ class MinzuFestivalsSpider:
             # 如果成功保存了一个完整资源（文字+图片或default.jpg），增加资源计数
             if resource_id and entity_id and images_saved > 0:
                 self.resources_count += 1
-                print(f"已保存完整资源 #{self.resources_count}/{self.max_resources}: {resource_title[:50]}...")
+                elapsed_time = int(time.time() - self.start_time) if self.start_time else 0
+                print(f"已保存完整资源 #{self.resources_count} (已用时: {elapsed_time//60}分{elapsed_time%60}秒): {resource_title[:50]}...")
             
-            # 提取链接，继续爬取（如果未达到限制）
+            # 提取链接，继续爬取（如果未超过时间限制）
             links = []
-            if self.resources_count < self.max_resources:
+            if not self.start_time or (time.time() - self.start_time) < self.max_duration:
                 for a in soup.find_all('a', href=True):
                     href = a['href']
                     absolute_url = urljoin(url, href)
@@ -1095,18 +1098,26 @@ class MinzuFestivalsSpider:
             print(f"爬取页面失败 {url}: {e}")
             return []
     
-    def run(self, max_pages=500):
+    def run(self, max_pages=None):
         """运行爬虫"""
         print("开始爬取中国民族文化资源库...")
-        print(f"数量限制：最多 {self.max_resources} 个资源（每个资源包含文字和图片）")
+        print(f"时间限制：30分钟")
+        
+        # 记录开始时间
+        self.start_time = time.time()
         
         queue = list(START_URLS)
         pages_crawled = 0
         
-        while queue and pages_crawled < max_pages:
-            # 检查是否达到资源数量限制
-            if self.resources_count >= self.max_resources:
-                print(f"已达到资源数量限制，停止爬取")
+        while queue:
+            # 检查是否超过时间限制
+            if self.start_time and (time.time() - self.start_time) >= self.max_duration:
+                print(f"已达到时间限制（30分钟），停止爬取")
+                break
+            
+            # 如果设置了max_pages，检查是否达到页面限制
+            if max_pages and pages_crawled >= max_pages:
+                print(f"已达到页面限制（{max_pages}页），停止爬取")
                 break
             
             url = queue.pop(0)
@@ -1120,8 +1131,9 @@ class MinzuFestivalsSpider:
             pages_crawled += 1
             time.sleep(1)  # 延迟1秒，避免请求过快
         
+        elapsed_time = int(time.time() - self.start_time)
         print(f"爬取完成，共爬取 {pages_crawled} 个页面")
-        print(f"资源数据: {self.resources_count}/{self.max_resources} 个资源")
+        print(f"资源数据: {self.resources_count} 个资源，用时: {elapsed_time//60}分{elapsed_time%60}秒")
     
     def close(self):
         """关闭数据库连接"""

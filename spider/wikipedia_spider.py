@@ -48,9 +48,10 @@ class WikipediaSpider:
         self.current_festival_image_count = 0  # 当前节日已保存的图片数量
         self.current_festival_name = None  # 当前节日的名称
         
-        # 数量限制（统一限制资源数量，每个资源包含文字和图片）
-        self.max_resources = 20  # 最大资源数量（每个资源包含文字和图片）
-        self.resources_count = 0  # 已爬取的资源数量
+        # 时间限制（30分钟）
+        self.max_duration = 30 * 60  # 最大爬取时间（秒）：30分钟
+        self.start_time = None  # 爬取开始时间
+        self.resources_count = 0  # 已爬取的资源数量（用于统计）
         
         # 确保crawled_images文件夹存在
         os.makedirs(CRAWLED_IMAGES_DIR, exist_ok=True)
@@ -921,8 +922,9 @@ class WikipediaSpider:
         if url in self.visited_urls:
             return False
         
-        # 检查是否达到数量限制
-        if self.resources_count >= self.max_resources:
+        # 检查是否超过时间限制
+        if self.start_time and (time.time() - self.start_time) >= self.max_duration:
+            print(f"已达到时间限制（30分钟），停止爬取")
             return False
         
         self.visited_urls.add(url)
@@ -937,10 +939,17 @@ class WikipediaSpider:
             
             # 提取标题和描述
             resource_title = self._extract_title(html_content)
+            
+            # 先检查页面标题是否与传统节日相关
+            if not self._is_festival_related(resource_title, url):
+                print(f"  跳过无关页面（非传统节日相关）: {resource_title}")
+                return False
+            
             description = self._extract_description(html_content)
             
-            # 检查是否达到资源数量限制
-            if self.resources_count >= self.max_resources:
+            # 检查是否超过时间限制
+            if self.start_time and (time.time() - self.start_time) >= self.max_duration:
+                print(f"已达到时间限制（30分钟），停止爬取")
                 return False
             
             # 先保存文字数据（即使没有图片也要保存，只要文本内容足够）
@@ -1021,8 +1030,9 @@ class WikipediaSpider:
             # 如果成功保存了一个完整资源（文字+图片或default.jpg），增加资源计数
             if resource_id and entity_id and image_saved:
                 self.resources_count += 1
+                elapsed_time = int(time.time() - self.start_time) if self.start_time else 0
                 title_display = resource_title[:50] if resource_title else "未知标题"
-                print(f"已保存完整资源 #{self.resources_count}/{self.max_resources}: {title_display}...")
+                print(f"已保存完整资源 #{self.resources_count} (已用时: {elapsed_time//60}分{elapsed_time%60}秒): {title_display}...")
                 return True
             
             return False
@@ -1031,10 +1041,117 @@ class WikipediaSpider:
             print(f"爬取页面失败 {url}: {e}")
             return False
     
+    def _is_festival_related(self, title, url=None):
+        """
+        判断页面是否与传统节日相关
+        包括汉族传统节日和中国各少数民族的传统节日
+        """
+        if not title:
+            return False
+        
+        title_lower = title.lower()
+        
+        # 节日相关关键词（包括汉族和少数民族节日）
+        festival_keywords = [
+            '节', '日', '祭', '典', '礼', '俗', '传统节日', '民俗节日',
+            '春节', '元宵', '清明', '端午', '中秋', '重阳', '除夕',
+            '那达慕', '泼水节', '火把节', '开斋节', '古尔邦节', '藏历',
+            '雪顿节', '望果节', '赛马节', '花山节', '三月三', '六月六',
+            '赶秋', '苗年', '侗年', '水族端节', '瑶族盘王节', '彝族年',
+            '白族三月街', '哈尼族十月年', '傣族泼水节', '纳西族三朵节',
+            '布依族六月六', '土家族赶年', '壮族三月三', '回族开斋节',
+            '维吾尔族古尔邦节', '藏族雪顿节', '蒙古族那达慕'
+        ]
+        
+        # 排除无关关键词（生物、地理、历史人物等）
+        exclude_keywords = [
+            '生物', '植物', '动物', '昆虫', '鸟类', '鱼类', '哺乳动物',
+            '地理', '山脉', '河流', '湖泊', '城市', '国家', '地区',
+            '历史人物', '皇帝', '皇帝', '朝代', '战争', '战役',
+            '化学', '物理', '数学', '科学', '技术', '工程',
+            '电影', '电视剧', '音乐', '歌曲', '专辑',
+            '公司', '企业', '品牌', '产品', '商品'
+        ]
+        
+        # 检查是否包含排除关键词
+        for exclude_keyword in exclude_keywords:
+            if exclude_keyword in title:
+                return False
+        
+        # 检查是否包含节日关键词
+        for keyword in festival_keywords:
+            if keyword in title:
+                return True
+        
+        # 如果URL中包含节日相关关键词，也认为是相关的
+        if url:
+            url_lower = url.lower()
+            for keyword in festival_keywords:
+                if keyword in url_lower:
+                    return True
+        
+        return False
+    
+    def _extract_related_links(self, html_content, current_url):
+        """从节日页面提取相关链接（继续发现新的节日页面）"""
+        related_links = []
+        try:
+            soup = BeautifulSoup(html_content, 'html.parser')
+            # 查找信息框（infobox）中的链接
+            infobox = soup.find('table', class_='infobox') or soup.find('table', {'class': re.compile('infobox', re.I)})
+            if infobox:
+                for a in infobox.find_all('a', href=True):
+                    href = a['href']
+                    if href.startswith('/wiki/') and not href.startswith('/wiki/File:') and not href.startswith('/wiki/Category:'):
+                        # 从href中提取页面标题
+                        page_title = href.replace('/wiki/', '').replace('_', ' ')
+                        # URL解码
+                        try:
+                            from urllib.parse import unquote
+                            page_title = unquote(page_title)
+                        except:
+                            pass
+                        # 检查链接文本和页面标题是否与传统节日相关
+                        link_text = a.get_text().strip()
+                        if self._is_festival_related(link_text) or self._is_festival_related(page_title):
+                            full_url = urljoin(BASE_URL, href)
+                            if full_url not in self.visited_urls and full_url not in related_links:
+                                related_links.append(full_url)
+            
+            # 查找"参见"或"相关"部分的链接
+            for heading in soup.find_all(['h2', 'h3']):
+                heading_text = heading.get_text().strip().lower()
+                if any(keyword in heading_text for keyword in ['参见', '相关', '另见', '参考']):
+                    next_sibling = heading.find_next_sibling(['ul', 'div', 'p'])
+                    if next_sibling:
+                        for a in next_sibling.find_all('a', href=True):
+                            href = a['href']
+                            if href.startswith('/wiki/') and not href.startswith('/wiki/File:') and not href.startswith('/wiki/Category:'):
+                                # 从href中提取页面标题
+                                page_title = href.replace('/wiki/', '').replace('_', ' ')
+                                # URL解码
+                                try:
+                                    from urllib.parse import unquote
+                                    page_title = unquote(page_title)
+                                except:
+                                    pass
+                                # 检查链接文本和页面标题是否与传统节日相关
+                                link_text = a.get_text().strip()
+                                if self._is_festival_related(link_text) or self._is_festival_related(page_title):
+                                    full_url = urljoin(BASE_URL, href)
+                                    if full_url not in self.visited_urls and full_url not in related_links:
+                                        related_links.append(full_url)
+        except Exception as e:
+            print(f"提取相关链接失败: {e}")
+        return related_links
+    
     def run(self):
         """运行爬虫"""
         print("开始爬取维基百科汉族传统节日...")
-        print(f"数量限制：最多 {self.max_resources} 个资源（每个资源包含文字和图片）")
+        print(f"时间限制：30分钟")
+        
+        # 记录开始时间
+        self.start_time = time.time()
         
         # 爬取列表页面
         try:
@@ -1044,25 +1161,45 @@ class WikipediaSpider:
             
             html_content = response.text
             
-            # 提取节日链接
-            festival_links = self._extract_festival_links(html_content)
-            print(f"找到 {len(festival_links)} 个节日链接")
+            # 提取初始节日链接
+            initial_links = self._extract_festival_links(html_content)
+            print(f"从列表页面找到 {len(initial_links)} 个初始节日链接")
             
-            # 爬取每个节日页面
+            # 使用队列机制，继续发现新链接
+            queue = list(initial_links)
             crawled_count = 0
-            for link in festival_links:
-                # 检查是否达到数量限制
-                if self.resources_count >= self.max_resources:
-                    print(f"已达到数量限制，停止爬取")
+            
+            while queue:
+                # 检查是否超过时间限制
+                if self.start_time and (time.time() - self.start_time) >= self.max_duration:
+                    print(f"已达到时间限制（30分钟），停止爬取")
                     break
                 
-                if self.crawl_festival_page(link):
+                url = queue.pop(0)
+                
+                # 爬取页面
+                if self.crawl_festival_page(url):
                     crawled_count += 1
+                    
+                    # 从当前页面提取相关链接，继续发现新页面
+                    try:
+                        response = self.session.get(url, timeout=10)
+                        response.raise_for_status()
+                        response.encoding = 'utf-8'
+                        related_links = self._extract_related_links(response.text, url)
+                        for link in related_links:
+                            if link not in self.visited_urls and link not in queue:
+                                queue.append(link)
+                        if related_links:
+                            print(f"  从当前页面发现 {len(related_links)} 个相关链接，队列中还有 {len(queue)} 个链接待爬取")
+                    except Exception as e:
+                        print(f"  提取相关链接失败: {e}")
                 
                 time.sleep(2)  # 延迟2秒，避免请求过快
             
+            elapsed_time = int(time.time() - self.start_time)
             print(f"爬取完成，共爬取 {crawled_count} 个节日页面")
-            print(f"资源数据: {self.resources_count}/{self.max_resources} 个资源")
+            print(f"资源数据: {self.resources_count} 个资源，用时: {elapsed_time//60}分{elapsed_time%60}秒")
             
         except Exception as e:
             print(f"爬取失败: {e}")

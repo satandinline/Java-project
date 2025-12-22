@@ -25,12 +25,6 @@
 
     <!-- ==================== 修改开始：搜索栏 ==================== -->
     <div class="search-section">
-      <!-- 管理员数据大屏入口 -->
-      <div v-if="isAdmin" class="admin-dashboard-link">
-        <router-link to="/dashboard" class="dashboard-btn">
-          📊 数据大屏
-        </router-link>
-      </div>
       <div class="search-bar">
         <!-- 支持空输入跳转 -->
         <input 
@@ -139,6 +133,9 @@ const isLoading = ref(false);
 // ==================== 新增：搜索相关状态 ====================
 const searchQuery = ref('');      // 搜索关键词
 
+// 检查是否为管理员
+const isAdmin = ref(false);
+
 // 1. 获取默认资源列表
 const fetchResources = async (page = null) => {
   if (isLoading.value) return;
@@ -205,13 +202,13 @@ const fetchResources = async (page = null) => {
     // 根据错误类型显示不同的提示信息
     let errorMessage = '无法加载资源列表';
     if (error.message && error.message.includes('超时')) {
-      errorMessage = '请求超时：无法连接到后端服务（端口8000），请确认后端服务是否已启动';
+      errorMessage = '请求超时：无法连接到后端服务（端口7200），请确认后端服务是否已启动';
     } else if (error instanceof TypeError && (error.message.includes('fetch') || error.message.includes('Failed to fetch'))) {
-      errorMessage = '无法连接到后端服务，请确认后端服务是否已启动（端口8000）';
+      errorMessage = '无法连接到后端服务，请确认后端服务是否已启动（端口7200）';
     } else if (error.message && error.message.includes('HTTP错误')) {
       errorMessage = `后端服务返回错误：${error.message}`;
     } else {
-      errorMessage = `加载失败：${error.message || '未知错误'}，请检查后端服务是否正常运行（端口8000）`;
+      errorMessage = `加载失败：${error.message || '未知错误'}，请检查后端服务是否正常运行（端口7200）`;
     }
     
     // 显示用户友好的错误提示
@@ -326,6 +323,18 @@ watch(() => route.query.page, (newPage) => {
 
 // 初始化
 onMounted(async () => {
+  // 检查用户角色
+  const userInfoStr = localStorage.getItem('userInfo');
+  if (userInfoStr) {
+    try {
+      const userInfo = JSON.parse(userInfoStr);
+      isAdmin.value = userInfo && (userInfo.role === '管理员' || userInfo.role === '超级管理员');
+    } catch (e) {
+      console.error('解析用户信息失败:', e);
+      isAdmin.value = false;
+    }
+  }
+  
   // 先检查后端服务是否可用（添加超时，快速失败，不阻塞页面）
   const healthController = new AbortController();
   const healthTimeout = setTimeout(() => healthController.abort(), 3000); // 3秒超时
@@ -654,25 +663,4 @@ onMounted(async () => {
   border-color: #66b1ff;
 }
 
-.admin-dashboard-link {
-  text-align: right;
-  margin-bottom: 10px;
-}
-
-.dashboard-btn {
-  display: inline-block;
-  padding: 8px 16px;
-  background: #409eff;
-  color: white;
-  text-decoration: none;
-  border-radius: 5px;
-  font-size: 14px;
-  transition: all 0.3s;
-}
-
-.dashboard-btn:hover {
-  background: #66b1ff;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 8px rgba(64, 158, 255, 0.3);
-}
 </style>

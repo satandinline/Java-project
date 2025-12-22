@@ -8,7 +8,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -126,6 +128,9 @@ public class AuthService {
             return result;
         }
 
+        // 更新在线状态
+        userDao.updateOnlineStatus(user.getId(), true);
+
         // 构建用户信息
         Map<String, Object> userInfo = new HashMap<>();
         userInfo.put("id", user.getId());
@@ -134,6 +139,7 @@ public class AuthService {
         userInfo.put("signature", user.getSignature());
         userInfo.put("avatar_path", user.getAvatarPath());
         userInfo.put("role", user.getRole());
+        userInfo.put("is_online", true);
 
         result.put("success", true);
         result.put("message", "登录成功");
@@ -167,6 +173,124 @@ public class AuthService {
         result.put("success", true);
         result.put("user_info", userInfo);
 
+        return result;
+    }
+
+    /**
+     * 用户登出
+     */
+    @Transactional
+    public Map<String, Object> logout(Long userId) {
+        Map<String, Object> result = new HashMap<>();
+        
+        Optional<User> userOpt = userDao.findById(userId);
+        if (userOpt.isEmpty()) {
+            result.put("success", false);
+            result.put("message", "用户不存在");
+            return result;
+        }
+
+        // 更新在线状态为离线
+        userDao.updateOnlineStatus(userId, false);
+
+        result.put("success", true);
+        result.put("message", "登出成功");
+        return result;
+    }
+
+    /**
+     * 获取所有用户列表（仅超级管理员）
+     */
+    public Map<String, Object> getAllUsers(Long currentUserId) {
+        Map<String, Object> result = new HashMap<>();
+        
+        // 检查当前用户是否为超级管理员
+        Optional<User> currentUserOpt = userDao.findById(currentUserId);
+        if (currentUserOpt.isEmpty()) {
+            result.put("success", false);
+            result.put("message", "用户不存在");
+            return result;
+        }
+
+        User currentUser = currentUserOpt.get();
+        if (!"超级管理员".equals(currentUser.getRole())) {
+            result.put("success", false);
+            result.put("message", "权限不足，仅超级管理员可查看");
+            return result;
+        }
+
+        List<User> users = userDao.getAllUsers();
+        List<Map<String, Object>> userList = new ArrayList<>();
+        for (User user : users) {
+            Map<String, Object> userInfo = new HashMap<>();
+            userInfo.put("id", user.getId());
+            userInfo.put("account", user.getAccount());
+            userInfo.put("nickname", user.getNickname());
+            userInfo.put("signature", user.getSignature());
+            userInfo.put("avatar_path", user.getAvatarPath());
+            userInfo.put("role", user.getRole());
+            userInfo.put("is_online", user.getIsOnline() != null && user.getIsOnline());
+            userInfo.put("last_active_time", user.getLastActiveTime());
+            userInfo.put("created_at", user.getCreatedAt());
+            userList.add(userInfo);
+        }
+
+        result.put("success", true);
+        result.put("users", userList);
+        return result;
+    }
+
+    /**
+     * 切换用户身份（仅超级管理员）
+     */
+    @Transactional
+    public Map<String, Object> switchUserRole(Long currentUserId, Long targetUserId, String newRole) {
+        Map<String, Object> result = new HashMap<>();
+        
+        // 检查当前用户是否为超级管理员
+        Optional<User> currentUserOpt = userDao.findById(currentUserId);
+        if (currentUserOpt.isEmpty()) {
+            result.put("success", false);
+            result.put("message", "当前用户不存在");
+            return result;
+        }
+
+        User currentUser = currentUserOpt.get();
+        if (!"超级管理员".equals(currentUser.getRole())) {
+            result.put("success", false);
+            result.put("message", "权限不足，仅超级管理员可操作");
+            return result;
+        }
+
+        // 检查目标用户是否存在
+        Optional<User> targetUserOpt = userDao.findById(targetUserId);
+        if (targetUserOpt.isEmpty()) {
+            result.put("success", false);
+            result.put("message", "目标用户不存在");
+            return result;
+        }
+
+        User targetUser = targetUserOpt.get();
+        
+        // 不能修改超级管理员的身份
+        if ("超级管理员".equals(targetUser.getRole())) {
+            result.put("success", false);
+            result.put("message", "不能修改超级管理员的身份");
+            return result;
+        }
+
+        // 验证新角色
+        if (!"管理员".equals(newRole) && !"普通用户".equals(newRole)) {
+            result.put("success", false);
+            result.put("message", "无效的角色，只能切换为管理员或普通用户");
+            return result;
+        }
+
+        // 更新用户角色
+        userDao.updateUserRole(targetUserId, newRole);
+
+        result.put("success", true);
+        result.put("message", "用户身份切换成功");
         return result;
     }
 }

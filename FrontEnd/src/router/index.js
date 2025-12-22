@@ -8,6 +8,7 @@ import SearchView from '../components/SearchView.vue';
 import Login from '../components/Login.vue';
 import ResourceDetail from '../components/ResourceDetail.vue';
 import DashboardView from '../components/DashboardView.vue';
+import UserManagement from '../components/UserManagement.vue';
 
 const routes = [
   {
@@ -63,6 +64,12 @@ const routes = [
     name: 'Dashboard',
     component: DashboardView,
     meta: { requiresAuth: true, requiresAdmin: true }
+  },
+  {
+    path: '/users',
+    name: 'UserManagement',
+    component: UserManagement,
+    meta: { requiresAuth: true, requiresSuperAdmin: true }
   }
 ];
 
@@ -96,8 +103,15 @@ router.beforeEach((to, from, next) => {
     }
     
     // 如果路由需要管理员权限
-    if (to.meta.requiresAdmin && userInfo.role !== '管理员') {
+    if (to.meta.requiresAdmin && userInfo.role !== '管理员' && userInfo.role !== '超级管理员') {
       console.log('权限不足，跳转到首页');
+      next('/');
+      return;
+    }
+    
+    // 如果路由需要超级管理员权限
+    if (to.meta.requiresSuperAdmin && userInfo.role !== '超级管理员') {
+      console.log('权限不足，需要超级管理员权限');
       next('/');
       return;
     }

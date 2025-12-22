@@ -18,7 +18,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:7200',
         changeOrigin: true,
         secure: false,
         ws: true, // 支持websocket
@@ -29,22 +29,27 @@ export default defineConfig({
         },
       },
       '/avatars': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:7200',
         changeOrigin: true,
         secure: false,
       },
       '/default.jpg': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:7200',
         changeOrigin: true,
         secure: false,
       },
       '/AIGC_graph': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:7200',
         changeOrigin: true,
         secure: false,
       },
       '/image_from_users': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:7200',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/AIGC_graph_from_users': {
+        target: 'http://localhost:7200',
         changeOrigin: true,
         secure: false,
       }

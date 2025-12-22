@@ -481,7 +481,7 @@ class UserReviewSystem:
             Dict or None: 评论信息或None(不存在)
         """
         query = """
-        SELECT c.*, u.username 
+        SELECT c.*, u.account as username 
         FROM user_comments c 
         JOIN users u ON c.user_id = u.id 
         WHERE c.id = %s
@@ -508,7 +508,7 @@ class UserReviewSystem:
         """
         if status:
             query = """
-            SELECT c.*, u.username 
+            SELECT c.*, u.account as username 
             FROM user_comments c 
             JOIN users u ON c.user_id = u.id 
             WHERE c.resource_id = %s AND c.comment_status = %s
@@ -518,7 +518,7 @@ class UserReviewSystem:
             params = (resource_id, status, limit, offset)
         else:
             query = """
-            SELECT c.*, u.username 
+            SELECT c.*, u.account as username 
             FROM user_comments c 
             JOIN users u ON c.user_id = u.id 
             WHERE c.resource_id = %s
@@ -650,7 +650,7 @@ class UserReviewSystem:
             List: 回复列表
         """
         query = """
-        SELECT r.*, u.username 
+        SELECT r.*, u.account as username 
         FROM comment_replies r 
         JOIN users u ON r.reply_user_id = u.id 
         WHERE r.comment_id = %s

@@ -45,6 +45,21 @@
         <!-- 删除操作栏 -->
         <div class="delete-actions" v-if="!isHistoryCollapsed && sessionHistory.length > 0">
           <button 
+            class="select-all-btn" 
+            @click="toggleSelectAll"
+            :title="isAllSelected ? '取消全选' : '全选'"
+          >
+            {{ isAllSelected ? '取消全选' : '全选' }}
+          </button>
+          <button 
+            v-if="selectedSessions.length > 0"
+            class="clear-selection-btn" 
+            @click="clearSelection"
+            title="取消选中"
+          >
+            取消选中
+          </button>
+          <button 
             class="delete-btn" 
             @click="deleteSelectedSessions"
             :disabled="selectedSessions.length === 0"
@@ -148,13 +163,23 @@
             <div class="message-content-wrapper">
               <div class="message-role-label">{{ msg.role === 'user' ? (currentUserNickname || '用户') : (msg.model === 'image' ? 'Huoshan' : 'Tongyi') }}</div>
               <!-- AI回答时显示左右分栏 -->
-              <div v-if="msg.role === 'assistant' && msg.retrieved_resources" class="ai-response-layout">
-                <!-- 左侧：检索到的资源 -->
+              <div v-if="msg.role === 'assistant' && (msg.retrieved_resources || msg.retrieved_resource_ids)" class="ai-response-layout">
+                <!-- 左侧：检索到的资源（持久化显示） -->
                 <div class="resources-panel">
-                  <div class="panel-header">📚 检索资源</div>
-                  <div class="resources-content">
+                  <div class="panel-header">
+                    <span>📚 检索资源</span>
+                    <button 
+                      v-if="msg.retrieved_resource_ids && msg.retrieved_resource_ids.length > 0"
+                      class="toggle-resources-btn"
+                      @click="toggleResourceExpanded(msg)"
+                      :title="isResourceExpanded(msg) ? '折叠' : '展开'"
+                    >
+                      {{ isResourceExpanded(msg) ? '▼' : '▶' }}
+                    </button>
+                  </div>
+                  <div class="resources-content" v-show="isResourceExpanded(msg) || !msg.retrieved_resource_ids">
                     <!-- 向量库结果 -->
-                    <div v-if="msg.retrieved_resources.vector_results && msg.retrieved_resources.vector_results.length > 0" class="resource-section">
+                    <div v-if="msg.retrieved_resources && msg.retrieved_resources.vector_results && msg.retrieved_resources.vector_results.length > 0" class="resource-section">
                       <div class="resource-section-title">向量库检索</div>
                       <div 
                         v-for="(item, idx) in msg.retrieved_resources.vector_results" 
@@ -165,24 +190,26 @@
                       </div>
                     </div>
                     <!-- 数据库结果 -->
-                    <div v-if="msg.retrieved_resources.database_results && msg.retrieved_resources.database_results.length > 0" class="resource-section">
+                    <div v-if="msg.retrieved_resources && msg.retrieved_resources.database_results && msg.retrieved_resources.database_results.length > 0" class="resource-section">
                       <div class="resource-section-title">数据库检索</div>
                       <div 
                         v-for="(item, idx) in msg.retrieved_resources.database_results" 
                         :key="`db-${idx}`"
                         class="resource-item"
+                        @click="goToResourceDetailFromRetrieved(item)"
+                        style="cursor: pointer;"
                       >
                         <div class="resource-source">{{ item.table || '数据库' }}</div>
-                        <div v-if="item.title" class="resource-title">{{ item.title }}</div>
+                        <div v-if="item.title" class="resource-title clickable-resource-title">{{ item.title }}</div>
                         <div v-if="item.content" class="resource-content">{{ item.content }}</div>
                         <div v-if="item.source" class="resource-source-url">{{ item.source }}</div>
-                        <div v-if="item.storage_path" class="resource-image">
-                          <img :src="getResourceImageUrl(item.storage_path, item.table)" class="resource-img" @click="previewImage(getResourceImageUrl(item.storage_path, item.table))" />
+                        <div v-if="item.storage_path || item.image_path" class="resource-image">
+                          <img :src="getResourceImageUrl(item.storage_path || item.image_path, item.table)" class="resource-img" @click.stop="previewImage(getResourceImageUrl(item.storage_path || item.image_path, item.table))" />
                         </div>
                       </div>
                     </div>
                     <!-- 网页爬取结果 -->
-                    <div v-if="msg.retrieved_resources.web_results && msg.retrieved_resources.web_results.length > 0" class="resource-section">
+                    <div v-if="msg.retrieved_resources && msg.retrieved_resources.web_results && msg.retrieved_resources.web_results.length > 0" class="resource-section">
                       <div class="resource-section-title">网页检索</div>
                       <div 
                         v-for="(item, idx) in msg.retrieved_resources.web_results" 
@@ -196,8 +223,31 @@
                         </div>
                       </div>
                     </div>
-                    <div v-if="!msg.retrieved_resources.vector_results?.length && !msg.retrieved_resources.database_results?.length && !msg.retrieved_resources.web_results?.length" class="no-resources">
+                    <div v-if="msg.retrieved_resource_ids && msg.retrieved_resource_ids.length > 0 && (!msg.retrieved_resources || (!msg.retrieved_resources.vector_results?.length && !msg.retrieved_resources.database_results?.length && !msg.retrieved_resources.web_results?.length))" class="no-resources">
+                      检索资源已保存，点击展开查看详情
+                    </div>
+                    <div v-else-if="!msg.retrieved_resources || (!msg.retrieved_resources.vector_results?.length && !msg.retrieved_resources.database_results?.length && !msg.retrieved_resources.web_results?.length)" class="no-resources">
                       未检索到相关资源
+                    </div>
+                  </div>
+                  <!-- 折叠状态：只显示资源实体名称列表（支持滑动查看） -->
+                  <div v-if="!isResourceExpanded(msg) && msg.retrieved_resource_ids && msg.retrieved_resource_ids.length > 0" class="resources-collapsed">
+                    <div class="collapsed-resources-scroll">
+                      <div 
+                        v-for="(item, idx) in (msg.retrieved_resources?.database_results || [])" 
+                        :key="`collapsed-${idx}`"
+                        class="collapsed-resource-item"
+                        @click="goToResourceDetailFromRetrieved(item)"
+                        :title="item.title || '未命名资源'"
+                      >
+                        <span class="collapsed-resource-name">{{ item.title || '未命名资源' }}</span>
+                        <span class="collapsed-resource-type">{{ item.table || '资源' }}</span>
+                      </div>
+                      <!-- 如果没有加载资源详情，只显示资源ID数量 -->
+                      <div v-if="!msg.retrieved_resources?.database_results && msg.retrieved_resource_ids.length > 0" class="collapsed-resource-item">
+                        <span class="collapsed-resource-name">已检索到 {{ msg.retrieved_resource_ids.length }} 个资源</span>
+                        <span class="collapsed-resource-type">点击展开查看</span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -206,7 +256,22 @@
                   <div class="panel-header">💡 AI回答</div>
                   <div class="answer-content">
                     <div class="message-text" v-html="formatAnswerText(msg.content)"></div>
-                    <div v-if="msg.image_path" class="message-image-result">
+                    <!-- 连环画：显示多张图片 -->
+                    <div v-if="msg.is_comic && msg.image_paths && msg.image_paths.length > 0" class="message-comic-result">
+                      <div class="comic-header">连环画（共{{ msg.comic_count || msg.image_paths.length }}张）</div>
+                      <div class="comic-images">
+                        <img 
+                          v-for="(imgPath, imgIdx) in msg.image_paths" 
+                          :key="imgIdx"
+                          :src="getImageUrl(imgPath)" 
+                          class="comic-image" 
+                          @click="previewComicImage(imgPath, msg.image_paths, imgIdx)"
+                          :alt="`连环画第${imgIdx + 1}张`"
+                        />
+                      </div>
+                    </div>
+                    <!-- 单张图片 -->
+                    <div v-else-if="msg.image_path" class="message-image-result">
                       <img :src="getImageUrl(msg.image_path)" class="result-image" @click="previewImage(getImageUrl(msg.image_path))" />
                     </div>
                     <div v-if="msg.key_entities && msg.key_entities.length > 0" class="key-entities">
@@ -235,7 +300,22 @@
                 </div>
                 <div v-if="msg.role === 'user' && msg.content" class="message-text" v-html="formatAnswerText(msg.content)"></div>
                 <div v-else-if="msg.role === 'assistant'" class="message-text" v-html="formatAnswerText(msg.content)"></div>
-                <div v-if="msg.image_path" class="message-image-result">
+                <!-- 连环画：显示多张图片 -->
+                <div v-if="msg.is_comic && msg.image_paths && msg.image_paths.length > 0" class="message-comic-result">
+                  <div class="comic-header">连环画（共{{ msg.comic_count || msg.image_paths.length }}张）</div>
+                  <div class="comic-images">
+                    <img 
+                      v-for="(imgPath, imgIdx) in msg.image_paths" 
+                      :key="imgIdx"
+                      :src="getImageUrl(imgPath)" 
+                      class="comic-image" 
+                      @click="previewImage(getImageUrl(imgPath), msg.image_paths.map(p => getImageUrl(p)), imgIdx)"
+                      :alt="`连环画第${imgIdx + 1}张`"
+                    />
+                  </div>
+                </div>
+                <!-- 单张图片 -->
+                <div v-else-if="msg.image_path" class="message-image-result">
                   <img :src="getImageUrl(msg.image_path)" class="result-image" @click="previewImage(getImageUrl(msg.image_path))" />
                 </div>
               </div>
@@ -301,28 +381,65 @@
               @keydown.enter.shift.exact="userInput += '\n'"
             ></textarea>
             <button 
+              v-if="!isLoading"
               class="send-btn" 
               @click="sendMessage"
-              :disabled="isLoading || (!userInput.trim() && uploadedImages.length === 0)"
+              :disabled="!userInput.trim() && uploadedImages.length === 0"
             >
-              <span v-if="isLoading">生成中...</span>
-              <span v-else>发送</span>
+              发送
+            </button>
+            <button 
+              v-else
+              class="send-btn stop-btn" 
+              @click="cancelGeneration"
+            >
+              停止生成
             </button>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- 图片预览模态框 -->
+    <!-- 图片预览模态框（支持前后切换） -->
     <div v-if="previewImageUrl" class="image-preview-modal" @click="previewImageUrl = null">
-      <img :src="previewImageUrl" class="preview-modal-image" @click.stop />
+      <div class="preview-modal-content" @click.stop>
+        <!-- 关闭按钮 -->
+        <button class="preview-close-btn" @click="previewImageUrl = null">×</button>
+        <!-- 上一张按钮 -->
+        <button 
+          v-if="previewImageList.length > 1 && previewImageIndex > 0"
+          class="preview-nav-btn preview-prev-btn" 
+          @click.stop="prevImage"
+          title="上一张 (←)"
+        >
+          ‹
+        </button>
+        <!-- 图片 -->
+        <img :src="previewImageUrl" class="preview-modal-image" />
+        <!-- 下一张按钮 -->
+        <button 
+          v-if="previewImageList.length > 1 && previewImageIndex < previewImageList.length - 1"
+          class="preview-nav-btn preview-next-btn" 
+          @click.stop="nextImage"
+          title="下一张 (→)"
+        >
+          ›
+        </button>
+        <!-- 图片索引指示器 -->
+        <div v-if="previewImageList.length > 1" class="preview-indicator">
+          {{ previewImageIndex + 1 }} / {{ previewImageList.length }}
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, nextTick, onMounted } from 'vue';
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue';
+import { useRouter } from 'vue-router';
 import CommentSection from './CommentSection.vue';
+
+const router = useRouter();
 
 // 获取当前登录用户信息
 const getCurrentUser = () => {
@@ -394,11 +511,14 @@ const userInput = ref('');
 const uploadedImages = ref([]);
 const aigcMode = ref('text'); // 'text' 或 'image'
 const isLoading = ref(false);
+const abortController = ref(null); // 用于取消请求的AbortController
 
 // UI引用
 const sessionListRef = ref(null);
 const conversationAreaRef = ref(null);
 const previewImageUrl = ref(null);
+const previewImageList = ref([]); // 当前预览的图片列表
+const previewImageIndex = ref(0); // 当前预览的图片索引
 const showComments = ref(false);
 const currentResourceId = ref(1); // 默认资源ID，可以根据实际情况修改
 const unreadNotifications = ref(0);
@@ -591,15 +711,24 @@ const loadSession = async (sessionId) => {
           content: msg.content || '',
           timestamp: msg.timestamp,
           retrieved_resources: msg.retrieved_resources || null,
+          retrieved_resource_ids: msg.retrieved_resource_ids || null,  // 添加检索资源ID列表
           key_entities: msg.key_entities || [],
           sources: msg.sources || '',
           image_path: msg.image_path || null,
+          image_paths: msg.image_paths || null,  // 连环画图片路径数组
+          is_comic: msg.is_comic || false,  // 是否是连环画
+          comic_count: msg.comic_count || 0,  // 连环画数量
           images: msg.images || [],
           model: msg.model || (session.mode || 'text')  // 添加模型类型
         };
         // 确保用户消息有内容显示
         if (message.role === 'user' && !message.content) {
           message.content = '[用户消息]';
+        }
+        // 如果有retrieved_resource_ids但没有retrieved_resources，尝试加载资源
+        if (message.role === 'assistant' && message.retrieved_resource_ids && message.retrieved_resource_ids.length > 0 && !message.retrieved_resources) {
+          // 延迟加载检索资源（避免阻塞UI）
+          loadRetrievedResourcesForMessage(message);
         }
         return message;
       });
@@ -702,10 +831,71 @@ const removeImage = (index) => {
   uploadedImages.value.splice(index, 1);
 };
 
-// 预览图片
-const previewImage = (url) => {
+// 预览图片（支持图片列表和索引）
+const previewImage = (url, imageList = null, index = 0) => {
   previewImageUrl.value = url;
+  // 如果提供了图片列表，保存列表和索引用于前后切换
+  if (imageList && Array.isArray(imageList) && imageList.length > 0) {
+    previewImageList.value = imageList;
+    previewImageIndex.value = index;
+  } else {
+    // 如果没有提供列表，尝试从当前消息中查找
+    previewImageList.value = [];
+    previewImageIndex.value = 0;
+  }
 };
+
+// 预览连环画图片（简化模板中的复杂表达式）
+const previewComicImage = (imgPath, imagePaths, imgIdx) => {
+  // 将图片路径数组转换为完整的URL数组
+  const imageList = imagePaths.map(p => getImageUrl(p));
+  const currentUrl = getImageUrl(imgPath);
+  previewImage(currentUrl, imageList, imgIdx);
+};
+
+// 切换到上一张图片
+const prevImage = () => {
+  if (previewImageList.value.length > 0 && previewImageIndex.value > 0) {
+    previewImageIndex.value--;
+    previewImageUrl.value = previewImageList.value[previewImageIndex.value];
+  }
+};
+
+// 切换到下一张图片
+const nextImage = () => {
+  if (previewImageList.value.length > 0 && previewImageIndex.value < previewImageList.value.length - 1) {
+    previewImageIndex.value++;
+    previewImageUrl.value = previewImageList.value[previewImageIndex.value];
+  }
+};
+
+// 键盘事件处理（支持左右键切换图片）
+const handleKeydown = (event) => {
+  if (previewImageUrl.value && previewImageList.value.length > 0) {
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      prevImage();
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      nextImage();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      previewImageUrl.value = null;
+      previewImageList.value = [];
+      previewImageIndex.value = 0;
+    }
+  }
+};
+
+// 在组件挂载时添加键盘事件监听
+onMounted(() => {
+  window.addEventListener('keydown', handleKeydown);
+});
+
+// 在组件卸载时移除键盘事件监听
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown);
+});
 
 // 发送消息（支持流式输出）
 const sendMessage = async () => {
@@ -765,6 +955,9 @@ const sendMessage = async () => {
   uploadedImages.value = [];
   isLoading.value = true;
 
+  // 创建AbortController用于取消请求
+  abortController.value = new AbortController();
+
   // 创建AI消息占位符（用于流式更新）
   const aiMessage = {
     role: 'assistant',
@@ -807,13 +1000,14 @@ const sendMessage = async () => {
       });
     }
 
-    // 使用EventSource或fetch处理流式响应
+    // 使用fetch处理响应，支持取消
     const response = await fetch('/api/aigc/chat', {
       method: 'POST',
       headers: {
         'X-User-Id': currentUser.id.toString()  // 在请求头中添加用户ID
       },
-      body: formData
+      body: formData,
+      signal: abortController.value.signal  // 添加signal以支持取消
     });
 
     if (!response.ok) {
@@ -856,8 +1050,18 @@ const sendMessage = async () => {
         aiMessage.content = data.answer || '处理成功';
         
         // 处理图片路径（图片AIGC模式）
-        if (data.image_path) {
+        // 检查是否是连环画
+        if (data.is_comic && data.image_paths && Array.isArray(data.image_paths)) {
+          // 连环画：使用image_paths数组
+          aiMessage.image_paths = data.image_paths;
+          aiMessage.is_comic = true;
+          aiMessage.comic_count = data.comic_count || data.image_paths.length;
+          // 第一张图片作为主图（用于兼容旧代码）
+          aiMessage.image_path = data.image_path || data.image_paths[0];
+        } else if (data.image_path) {
+          // 单张图片
           aiMessage.image_path = data.image_path;
+          aiMessage.is_comic = false;
         }
         
         // 设置模型类型（用于显示AI昵称）
@@ -874,6 +1078,9 @@ const sendMessage = async () => {
         if (data.retrieved_resources) {
           aiMessage.retrieved_resources = data.retrieved_resources;
         }
+        if (data.retrieved_resource_ids) {
+          aiMessage.retrieved_resource_ids = data.retrieved_resource_ids;
+        }
       }
       
       // 注意：消息已在后端AIGC chat接口中自动保存，这里不需要再次保存
@@ -889,6 +1096,19 @@ const sendMessage = async () => {
 
     await saveCurrentSession();
   } catch (error) {
+    // 检查是否是用户主动取消
+    if (error.name === 'AbortError') {
+      console.log('用户取消了生成');
+      aiMessage.content = '生成已取消';
+      // 移除AI消息占位符（因为已取消）
+      const index = currentConversation.value.indexOf(aiMessage);
+      if (index > -1) {
+        currentConversation.value.splice(index, 1);
+      }
+      return; // 取消时不保存会话
+    }
+    
+    // 其他错误处理
     console.error('发送消息失败:', error);
     const errorMessage = error.message || '未知错误';
     let errorContent = `抱歉，生成失败：${errorMessage}。`;
@@ -904,8 +1124,17 @@ const sendMessage = async () => {
     await saveCurrentSession();
   } finally {
     isLoading.value = false;
+    abortController.value = null; // 清除AbortController
     await nextTick();
     scrollToBottom();
+  }
+};
+
+// 取消生成
+const cancelGeneration = () => {
+  if (abortController.value) {
+    abortController.value.abort();
+    console.log('正在取消生成...');
   }
 };
 
@@ -926,6 +1155,72 @@ const dataURLtoBlob = (dataURL) => {
 const scrollToBottom = () => {
   if (conversationAreaRef.value) {
     conversationAreaRef.value.scrollTop = conversationAreaRef.value.scrollHeight;
+  }
+};
+
+// 检索资源展开/折叠状态（按消息ID存储）
+const resourceExpandedStates = ref({});
+
+// 切换检索资源展开/折叠状态
+const toggleResourceExpanded = (msg) => {
+  const msgId = msg.id || msg.timestamp || JSON.stringify(msg);
+  resourceExpandedStates.value[msgId] = !resourceExpandedStates.value[msgId];
+};
+
+// 检查检索资源是否展开
+const isResourceExpanded = (msg) => {
+  const msgId = msg.id || msg.timestamp || JSON.stringify(msg);
+  // 默认展开（如果没有设置过状态）
+  return resourceExpandedStates.value[msgId] !== false;
+};
+
+// 为消息加载检索资源（如果有retrieved_resource_ids但没有retrieved_resources）
+const loadRetrievedResourcesForMessage = async (message) => {
+  if (!message.retrieved_resource_ids || message.retrieved_resource_ids.length === 0) {
+    return;
+  }
+  
+  try {
+    // 从后端加载资源详情
+    const resourceIds = message.retrieved_resource_ids.join(',');
+    const response = await fetch(`/api/aigc/resources?ids=${resourceIds}`);
+    const data = await response.json();
+    
+    if (data.success && data.resources) {
+      // 构建retrieved_resources结构
+      message.retrieved_resources = {
+        database_results: data.resources.map(resource => ({
+          id: resource.id,
+          title: resource.title || resource.entity_name || '未命名资源',
+          content: resource.description || resource.content || '',
+          table: resource.table || 'cultural_resources',
+          source: resource.source || ''
+        }))
+      };
+    }
+  } catch (error) {
+    console.error('加载检索资源失败:', error);
+  }
+};
+
+// 从检索结果跳转到资源详情
+const goToResourceDetailFromRetrieved = (item) => {
+  // 根据资源类型和ID跳转到资源详情页
+  if (item.id && item.table) {
+    // 构建跳转参数
+    const query = {
+      resource_id: item.id,
+      resource_type: item.table,
+      entity_name: item.title || ''
+    };
+    
+    // 跳转到资源详情页
+    router.push({
+      path: '/resource/detail',
+      query: query
+    });
+  } else {
+    console.warn('无法跳转：缺少资源ID或表名', item);
   }
 };
 
@@ -1104,6 +1399,28 @@ const toggleSessionSelection = (sessionId) => {
   }
 };
 
+// 全选/取消全选
+const isAllSelected = computed(() => {
+  const allSessions = [...textSessions.value, ...imageSessions.value];
+  return allSessions.length > 0 && allSessions.every(s => selectedSessions.value.includes(s.id));
+});
+
+const toggleSelectAll = () => {
+  const allSessions = [...textSessions.value, ...imageSessions.value];
+  if (isAllSelected.value) {
+    // 取消全选
+    selectedSessions.value = [];
+  } else {
+    // 全选
+    selectedSessions.value = allSessions.map(s => s.id);
+  }
+};
+
+// 取消所有选中
+const clearSelection = () => {
+  selectedSessions.value = [];
+};
+
 // 删除选中的会话
 const deleteSelectedSessions = async () => {
   if (selectedSessions.value.length === 0) {
@@ -1141,9 +1458,16 @@ const deleteSelectedSessions = async () => {
       }
       
       // 从列表中移除已删除的会话
+      const deletedIds = [...selectedSessions.value];
       sessionHistory.value = sessionHistory.value.filter(
-        s => !selectedSessions.value.includes(s.id)
+        s => !deletedIds.includes(s.id)
       );
+      
+      // 如果当前会话被删除，需要清空对话
+      if (deletedIds.includes(currentSessionId.value)) {
+        currentSessionId.value = null;
+        currentConversation.value = [];
+      }
       
       // 清空选中列表
       selectedSessions.value = [];
@@ -1480,11 +1804,12 @@ onMounted(async () => {
   flex-wrap: wrap;
 }
 
+.select-all-btn,
+.clear-selection-btn,
 .delete-btn,
 .delete-all-btn {
   flex: 1;
   padding: 6px 12px;
-  background: #f56c6c;
   color: white;
   border: none;
   border-radius: 4px;
@@ -1492,6 +1817,26 @@ onMounted(async () => {
   font-size: 12px;
   transition: background 0.3s;
   min-width: 80px;
+}
+
+.select-all-btn {
+  background: #67c23a;
+}
+
+.select-all-btn:hover {
+  background: #85ce61;
+}
+
+.clear-selection-btn {
+  background: #909399;
+}
+
+.clear-selection-btn:hover {
+  background: #a6a9ad;
+}
+
+.delete-btn {
+  background: #f56c6c;
 }
 
 .delete-btn:hover:not(:disabled) {
@@ -1716,6 +2061,78 @@ onMounted(async () => {
   text-decoration: underline;
 }
 
+/* 折叠状态的资源列表（支持滑动） */
+.resources-collapsed {
+  padding: 8px;
+  background: #f9f9f9;
+  border-radius: 6px;
+  margin-top: 8px;
+}
+
+.collapsed-resources-scroll {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 0;
+  scrollbar-width: thin;
+  scrollbar-color: #c0c4cc #f5f7fa;
+}
+
+.collapsed-resources-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+
+.collapsed-resources-scroll::-webkit-scrollbar-track {
+  background: #f5f7fa;
+  border-radius: 3px;
+}
+
+.collapsed-resources-scroll::-webkit-scrollbar-thumb {
+  background: #c0c4cc;
+  border-radius: 3px;
+}
+
+.collapsed-resources-scroll::-webkit-scrollbar-thumb:hover {
+  background: #a0a4a8;
+}
+
+.collapsed-resource-item {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  background: white;
+  border: 1px solid #e4e7ed;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.3s;
+  min-width: 120px;
+  max-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.collapsed-resource-item:hover {
+  background: #f0f9ff;
+  border-color: #409eff;
+  transform: translateY(-2px);
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.2);
+}
+
+.collapsed-resource-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collapsed-resource-type {
+  font-size: 11px;
+  color: #909399;
+}
+
 .resource-image {
   margin-top: 10px;
 }
@@ -1812,6 +2229,39 @@ onMounted(async () => {
   border-radius: 6px;
   cursor: pointer;
   border: 1px solid #ddd;
+}
+
+.message-comic-result {
+  margin-top: 10px;
+}
+
+.comic-header {
+  font-size: 14px;
+  font-weight: 600;
+  color: #409eff;
+  margin-bottom: 10px;
+}
+
+.comic-images {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.comic-image {
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid #ddd;
+  transition: transform 0.2s;
+}
+
+.comic-image:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
 }
 
 .message-time {
@@ -1990,6 +2440,14 @@ onMounted(async () => {
   cursor: not-allowed;
 }
 
+.stop-btn {
+  background: #f56c6c !important;
+}
+
+.stop-btn:hover {
+  background: #f78989 !important;
+}
+
 /* 图片预览模态框 */
 .image-preview-modal {
   position: fixed;
@@ -2006,11 +2464,80 @@ onMounted(async () => {
 }
 
 .preview-modal-image {
-  max-width: 90%;
-  max-height: 90%;
+  max-width: 90vw;
+  max-height: 90vh;
   object-fit: contain;
   border-radius: 8px;
   cursor: default;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.preview-close-btn {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 40px;
+  height: 40px;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  font-size: 24px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1001;
+  transition: background 0.3s;
+}
+
+.preview-close-btn:hover {
+  background: rgba(0, 0, 0, 0.8);
+}
+
+.preview-nav-btn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 50px;
+  height: 50px;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  font-size: 32px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1001;
+  transition: background 0.3s;
+  user-select: none;
+}
+
+.preview-nav-btn:hover {
+  background: rgba(0, 0, 0, 0.8);
+}
+
+.preview-prev-btn {
+  left: 20px;
+}
+
+.preview-next-btn {
+  right: 20px;
+}
+
+.preview-indicator {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 14px;
+  z-index: 1001;
 }
 
 /* 滚动条样式 */
