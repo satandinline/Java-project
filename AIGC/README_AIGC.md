@@ -245,14 +245,18 @@ MYSQL_DB=java_project
 - **会话信息**：`qa_sessions` 表
   - 存储每个用户的会话列表
   - 包含会话摘要（自动提取的标题）
+  - 包含 `mode` 字段（ENUM('text', 'image')）标识会话类型
   - 关联用户ID
 - **消息内容**：`qa_messages` 表
   - 存储每条用户消息和AI回复
   - 关联用户ID和会话ID
   - 包含 `user_message`（用户输入）和 `ai_message`（AI回答）字段
   - 包含 `model` 字段（'text' 或 'image'）标识使用的模型类型
-  - 包含 `image_url` 字段（图片AIGC时存储生成的图片地址）
+  - 包含 `image_url` 字段（文字AIGC如果没有用户上传图片，使用AIGC_graph/default.jpg；图片AIGC存储生成的图片地址）
+  - 包含 `image_from_users_url` 字段（用户上传的图片URL，存储在AIGC_graph_from_users文件夹中，JSON格式存储多张图片）
+  - 包含 `retrieval_id` 字段（TEXT类型，存储检索到的资源ID列表，多个ID用英文逗号分隔）
   - 包含时间戳和用户反馈字段
+  - 消息保存机制：用户发送消息后立即保存（ai_message为空），AI生成完成后使用message_id更新现有消息（UPDATE操作），避免重复插入
 
 ### 用户上传的数据
 
@@ -339,7 +343,7 @@ MYSQL_DB=java_project
 ## 常见问题
 
 ### 1. API请求失败
-- 检查后端服务器是否运行
+- 检查后端服务器是否运行（端口7200）
 - 验证API密钥配置是否正确
 - 查看后端日志错误信息
 
@@ -347,21 +351,37 @@ MYSQL_DB=java_project
 - 检查图片生成API密钥
 - 验证提示词格式
 - 确认图片存储路径权限
+- 如果看到"cannot access local variable 'rag_system'"错误，说明变量作用域问题，已修复（在函数开始处初始化rag_system变量）
 
 ### 3. 会话加载失败
 - 检查数据库连接
 - 验证用户ID是否正确
 - 查看数据库表结构
+- 如果看到"JSON.parse: unexpected end of data"错误，可能是数据库查询返回格式问题，已修复（统一使用DictCursor）
 
-### 4. 连环画只生成4-5张图片
+### 4. 重复的用户消息
+- **已修复**：系统现在使用UPDATE机制，避免重复插入消息
+- 如果仍然出现，请清除浏览器缓存并重新加载页面
+
+### 5. 检索资源ID未保存
+- **已修复**：系统现在从RAG检索结果中提取资源ID并正确保存到qa_messages表的retrieval_id字段
+- 检查数据库qa_messages表的retrieval_id字段是否有值
+
+### 6. 连环画只生成4-5张图片
 - **已修复**：提示词已优化，要求生成8-12个场景
 - 如果仍然只生成少量图片，可能是故事生成失败或解析错误，请查看日志
 
-### 5. 生成的内容看起来像AI生成的或缺乏创新性
+### 7. 生成的内容看起来像AI生成的或缺乏创新性
 - **已优化**：提示词已优化，强调创新性、原创性、真实性和自然性
 - 系统会避免明显的AI生成痕迹，生成的内容更加真实可信
 - 系统会基于参考资料进行深度创作和创新表达，而不是简单复制检索结果
 - 生成的内容具有独特性，可以作为新的、独立的公共文化资源
+
+### 8. 用户上传的AIGC图片无法显示
+- 检查AIGC_graph_from_users文件夹是否存在
+- 确认文件已正确保存到AIGC_graph_from_users文件夹
+- 检查前端vite.config.js是否配置了AIGC_graph_from_users代理
+- 确认后端路由/api/AIGC_graph_from_users/<filename>正常工作
 
 ## 许可证
 

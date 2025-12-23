@@ -2,10 +2,25 @@
 公共文化资源管理系统 - 技术实现手册
 ================================================================================
 
-版本：2.4
+版本：2.5
 更新日期：2025年12月23日
 
 重要更新：
+- AIGC功能修复与优化：
+  * 修复即时显示用户消息：用户发送消息后立即保存到数据库并显示，使用UPDATE机制避免重复插入
+  * 修复重复用户消息问题：改为使用message_id更新现有消息，而不是重复插入
+  * 修复retrieval_id字段保存：从RAG检索结果中提取资源ID并正确保存到qa_messages表的retrieval_id字段
+  * 修复image_url处理：文字AIGC如果没有用户上传图片，使用AIGC_graph/default.jpg作为默认图片
+  * 修复用户上传图片存储：用户上传的AIGC图片统一存入AIGC_graph_from_users文件夹，逻辑与uploads一致
+  * 修复rag_system变量作用域问题：在函数开始处初始化rag_system变量，避免UnboundLocalError
+  * 添加AIGC_graph_from_users路由支持：新增/api/AIGC_graph_from_users/<filename>路由提供用户上传图片访问
+  * 优化消息保存机制：支持通过message_id更新现有消息，避免重复保存
+- 数据库结构更新：
+  * qa_messages表添加retrieval_id字段（TEXT类型），用于存储检索到的资源ID列表（英文逗号分隔）
+  * 支持从qa_messages表直接读取retrieval_id，无需从AIGC_cultural_resources表查询
+- 前端配置更新：
+  * vite.config.js添加AIGC_graph_from_users代理配置
+- 技术实现手册更新：
 - AIGC功能优化：
   * 用户发送消息后立即保存到数据库并显示，不等待AI生成完成
   * 检索资源持久化显示：在AIGC资源表中保存检索资源ID列表，支持折叠/展开查看
@@ -212,7 +227,38 @@ CREATE TABLE users (
 - 如果图片属于某个文字资源，`resource_id` 和 `entity_id` 不为NULL
 - 如果图片是独立抓取的，`resource_id` 和 `entity_id` 为NULL
 
-5. 用户访问日志表 (user_access_logs)
+5. 问答会话表 (qa_sessions)
+
+存储AIGC对话会话信息。
+
+关键字段：
+- `user_id`: 用户ID（外键，关联users表）
+- `summary`: 会话摘要（自动提取的标题，不超过20字）
+- `mode`: 会话模式（ENUM('text', 'image')，标识是文字AIGC还是图片AIGC）
+- `created_at`: 创建时间
+
+6. 问答消息表 (qa_messages)
+
+存储AIGC对话中的每条消息（用户消息和AI回复）。
+
+关键字段：
+- `user_id`: 用户ID（外键，关联users表）
+- `session_id`: 会话ID（外键，关联qa_sessions表）
+- `user_message`: 用户输入的信息（TEXT类型）
+- `ai_message`: AI的回答（TEXT类型）
+- `model`: 模型类型（ENUM('text', 'image')，标识使用的模型）
+- `image_url`: 图片URL（文字类型AIGC如果没有用户上传图片，使用AIGC_graph/default.jpg；图片类型AIGC存储生成的图片地址）
+- `image_from_users_url`: 用户上传的图片URL（存储在AIGC_graph_from_users文件夹中，JSON格式存储多张图片）
+- `retrieval_id`: 检索的资源ID列表（TEXT类型，多个ID用英文逗号分隔，用于存储RAG检索到的资源ID）
+- `create_time`: 创建时间
+- `timestamp`: 消息发送时间
+
+消息保存机制：
+- 用户发送消息后立即保存到数据库（ai_message为空）
+- AI生成完成后使用message_id更新现有消息（UPDATE操作），避免重复插入
+- 检索资源ID从RAG结果中提取并保存到retrieval_id字段
+
+7. 用户访问日志表 (user_access_logs)
 
 记录所有用户访问行为。
 
@@ -407,10 +453,12 @@ RAG检索增强生成
 
 工作流程：
 1. 用户输入问题或上传图片
-2. 如果上传图片，先进行图像理解
-3. 从向量数据库中检索相关文化资源
-4. 将检索结果作为上下文，调用AI模型生成回答
-5. 保存对话记录到数据库
+2. 立即保存用户消息到数据库（ai_message为空），返回message_id
+3. 如果上传图片，先进行图像理解
+4. 从向量数据库中检索相关文化资源
+5. 从检索结果中提取资源ID列表，保存到retrieval_id字段
+6. 将检索结果作为上下文，调用AI模型生成回答
+7. 使用message_id更新现有消息（UPDATE操作），添加AI回答和检索资源ID
 
 延迟加载优化：
 - RAG系统和ImageAIGC系统采用延迟加载
@@ -421,9 +469,18 @@ RAG检索增强生成
 
 工作流程：
 1. 用户输入提示词或上传参考图片
-2. 如果没有提示词，自动生成故事
-3. 调用图像生成API（Huoshan模型）
-4. 保存生成的图片到本地和数据库
+2. 立即保存用户消息到数据库（ai_message为空），返回message_id
+3. 如果上传图片，先进行图像理解（使用RAG系统）
+4. 如果没有提示词，使用RAG系统自动生成故事
+5. 调用图像生成API（Huoshan模型）
+6. 使用message_id更新现有消息（UPDATE操作），添加AI回答和生成的图片URL
+7. 保存生成的图片到本地（AIGC_graph文件夹）和数据库
+
+用户上传图片处理：
+- 用户上传的AIGC图片统一存入AIGC_graph_from_users文件夹
+- 文件命名格式：用户账号-上传时间.扩展名
+- 存储逻辑与uploads文件夹一致
+- 如果没有上传图片，使用AIGC_graph/default.jpg作为默认图片
 
 4. 资源上传系统
 
@@ -971,10 +1028,15 @@ Vue.js代码规范
 4. AIGC功能异常
 
 检查项：
-- Python AIGC服务是否运行（如果使用AI功能）
+- Python AIGC服务是否运行（如果使用AI功能，端口7200）
 - AI模型API密钥配置
 - 网络连接是否正常
 - 查看错误日志
+- 如果看到"cannot access local variable 'rag_system'"，说明变量作用域问题，已修复（在函数开始处初始化rag_system变量）
+- 如果看到"JSON.parse: unexpected end of data"，可能是数据库查询返回格式问题，已修复（统一使用DictCursor）
+- 如果看到重复的用户消息，说明消息保存逻辑问题，已修复为UPDATE机制
+- 检查AIGC_graph_from_users文件夹是否存在（用户上传图片存储位置）
+- 检查retrieval_id字段是否正确保存（从RAG检索结果中提取资源ID）
 
 5. Maven依赖下载失败
 
@@ -1012,7 +1074,20 @@ Vue.js代码规范
 
 版本历史
 
-v2.4.0 (当前版本) - 2025年12月23日
+v2.5.0 (当前版本) - 2025年12月23日
+
+主要更新：
+- 修复AIGC即时显示用户消息：用户发送消息后立即保存到数据库并显示，使用UPDATE机制避免重复插入
+- 修复重复用户消息问题：改为使用message_id更新现有消息，而不是重复插入
+- 修复retrieval_id字段保存：从RAG检索结果中提取资源ID并正确保存到qa_messages表的retrieval_id字段
+- 修复image_url处理：文字AIGC如果没有用户上传图片，使用AIGC_graph/default.jpg作为默认图片
+- 修复用户上传图片存储：用户上传的AIGC图片统一存入AIGC_graph_from_users文件夹，逻辑与uploads一致
+- 修复rag_system变量作用域问题：在函数开始处初始化rag_system变量，避免UnboundLocalError
+- 添加AIGC_graph_from_users路由支持：新增/api/AIGC_graph_from_users/<filename>路由提供用户上传图片访问
+- 优化消息保存机制：支持通过message_id更新现有消息，避免重复保存
+- 数据库结构更新：qa_messages表添加retrieval_id字段（TEXT类型），用于存储检索到的资源ID列表
+
+v2.4.0 - 2025年12月23日
 
 主要更新：
 - 修复Unicode编码错误（Windows GBK编码兼容性）
