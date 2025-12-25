@@ -66,7 +66,7 @@ class AutoAnnotationService:
             time.sleep(self.check_interval)
     
     def _check_and_annotate(self):
-        """检查并标注新增/更新的资源"""
+        """检查并标注新增/更新的资源（只针对用户上传的资源）"""
         try:
             conn = get_default_db_connection()
             if not conn:
@@ -74,44 +74,20 @@ class AutoAnnotationService:
             
             try:
                 with conn.cursor(DictCursor) as cursor:
-                    # 检查cultural_resources表的新增/更新记录
+                    # 只检查cultural_resources_from_user表的新增/更新记录（用户上传的资源）
+                    # 注意：cultural_resources表和AIGC_cultural_resources表的资源不应该自动创建标注任务
+                    # 它们应该通过其他方式（如人工触发）来创建标注任务
                     cursor.execute("""
-                        SELECT id, title, resource_type, content_feature_data, source_from
-                        FROM cultural_resources
-                        WHERE id NOT IN (
-                            SELECT DISTINCT resource_id 
-                            FROM annotation_tasks 
-                            WHERE resource_source = 'cultural_resources' 
-                            AND status IN ('已完成', 'AI标注完成')
-                        )
-                        ORDER BY created_at DESC
-                        LIMIT 10
-                    """)
-                    resources = cursor.fetchall()
-                    
-                    for resource in resources:
-                        if resource['id'] in self.processed_ids:
-                            continue
-                        
-                        try:
-                            self._annotate_resource(resource, 'cultural_resources')
-                            self.processed_ids.add(resource['id'])
-                        except Exception as e:
-                            print(f"[自动标注] 标注资源 {resource['id']} 失败: {e}")
-                            self._add_to_dead_letter_queue(resource, str(e))
-                    
-                    # 检查cultural_resources_from_user表的新增/更新记录
-                    cursor.execute("""
-                        SELECT id, title, resource_type, content_feature_data
-                        FROM cultural_resources_from_user
-                        WHERE id NOT IN (
+                        SELECT cru.id, cru.title, cru.resource_type, cru.content_feature_data
+                        FROM cultural_resources_from_user cru
+                        WHERE cru.id NOT IN (
                             SELECT DISTINCT resource_id 
                             FROM annotation_tasks 
                             WHERE resource_source = 'cultural_resources_from_user' 
                             AND status IN ('已完成', 'AI标注完成')
                         )
-                        AND ai_review_status = 'passed'
-                        ORDER BY upload_time DESC
+                        AND cru.ai_review_status = 'passed'
+                        ORDER BY cru.upload_time DESC
                         LIMIT 10
                     """)
                     user_resources = cursor.fetchall()
@@ -121,36 +97,32 @@ class AutoAnnotationService:
                             continue
                         
                         try:
-                            self._annotate_resource(resource, 'cultural_resources_from_user')
+                            # 检查是否已经有标注任务（状态为"待标注"或"AI标注中"）
+                            cursor.execute("""
+                                SELECT id FROM annotation_tasks 
+                                WHERE resource_id = %s 
+                                AND resource_source = 'cultural_resources_from_user'
+                                AND status IN ('待标注', 'AI标注中', 'AI标注完成')
+                                LIMIT 1
+                            """, (resource['id'],))
+                            existing_task = cursor.fetchone()
+                            
+                            if not existing_task:
+                                # 如果没有标注任务，创建一个
+                                cursor.execute("""
+                                    INSERT INTO annotation_tasks 
+                                    (resource_id, resource_source, task_type, annotation_method, status)
+                                    VALUES (%s, 'cultural_resources_from_user', '实体', 'ai', '待标注')
+                                """, (resource['id'],))
+                                conn.commit()
+                                task_id = cursor.lastrowid
+                                print(f"[自动标注] 为资源 {resource['id']} 创建标注任务 {task_id}")
+                            
+                            # 注意：这里不直接调用_annotate_resource，因为标注应该由upload_handler.py中的trigger_ai_annotation触发
+                            # 或者由后台定时任务触发
                             self.processed_ids.add(resource['id'])
                         except Exception as e:
-                            print(f"[自动标注] 标注资源 {resource['id']} 失败: {e}")
-                            self._add_to_dead_letter_queue(resource, str(e))
-                    
-                    # 检查AIGC_cultural_resources表的新增/更新记录
-                    cursor.execute("""
-                        SELECT id, title, resource_type, content_feature_data, source_from
-                        FROM AIGC_cultural_resources
-                        WHERE id NOT IN (
-                            SELECT DISTINCT resource_id 
-                            FROM annotation_tasks 
-                            WHERE resource_source = 'AIGC_cultural_resources' 
-                            AND status IN ('已完成', 'AI标注完成')
-                        )
-                        ORDER BY created_at DESC
-                        LIMIT 10
-                    """)
-                    aigc_resources = cursor.fetchall()
-                    
-                    for resource in aigc_resources:
-                        if resource['id'] in self.processed_ids:
-                            continue
-                        
-                        try:
-                            self._annotate_resource(resource, 'AIGC_cultural_resources')
-                            self.processed_ids.add(resource['id'])
-                        except Exception as e:
-                            print(f"[自动标注] 标注资源 {resource['id']} 失败: {e}")
+                            print(f"[自动标注] 处理资源 {resource['id']} 失败: {e}")
                             self._add_to_dead_letter_queue(resource, str(e))
                             
             finally:

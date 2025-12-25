@@ -367,9 +367,20 @@ class ImageAIGC:
             return ""
 
     def _is_comic_request(self, user_input: str) -> bool:
-        """检测用户输入是否为连环画/漫画生成请求"""
-        comic_keywords = ["连环画", "漫画", "绘本", "故事画", "系列图", "多张图", "一套图"]
+        """检测用户输入是否为连环画/漫画生成请求（更严格的检测）"""
+        if not user_input or not isinstance(user_input, str):
+            return False
+        
+        comic_keywords = ["连环画", "漫画", "绘本", "故事画", "系列图", "多张图", "一套图", "多幅图", "一组图"]
         user_input_lower = user_input.lower()
+        
+        # 更严格的检测：必须明确包含关键词，避免误判
+        # 例如"一张图"不应该被识别为多图请求
+        negative_keywords = ["一张图", "一幅图", "单张图", "单个图"]
+        for neg_keyword in negative_keywords:
+            if neg_keyword in user_input_lower:
+                return False
+        
         return any(keyword in user_input_lower for keyword in comic_keywords)
     
     def _generate_story(self, user_request: str) -> Optional[Dict]:

@@ -56,6 +56,11 @@
                 <div class="notification-content">{{ notif.content }}</div>
                 <div class="notification-time">{{ formatNotificationTime(notif.created_at) }}</div>
               </div>
+              <div class="notification-footer">
+                <router-link to="/messages" class="view-all-link" @click="showNotificationList = false">
+                  查看全部消息 →
+                </router-link>
+              </div>
             </div>
           </div>
           
@@ -528,16 +533,18 @@ const handleNotificationClick = async (notif) => {
     if (notif.notification_type === 'like' || notif.notification_type === 'reply') {
       // 需要先获取评论对应的resource_id
       try {
-        const response = await fetch(`/api/comments/${notif.related_id}/resource-id`);
+        const response = await fetch(`/api/comments/${notif.related_id}`);
         const data = await response.json();
-        if (data.success && data.resource_id) {
+        if (data.success && data.comment && data.comment.resource_id) {
           router.push({
             path: '/resource/detail',
             query: {
-              id: data.resource_id,
-              comment_id: notif.related_id
+              resource_id: data.comment.resource_id,
+              highlight_comment_id: notif.related_id
             }
           });
+        } else {
+          alert('评论不存在或已被删除');
         }
       } catch (error) {
       }
@@ -2079,6 +2086,22 @@ main {
 
 .notification-item.unread {
   background: #ecf5ff;
+}
+
+.notification-footer {
+  padding: 10px;
+  border-top: 1px solid #eee;
+  text-align: center;
+}
+
+.view-all-link {
+  color: #409eff;
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.view-all-link:hover {
+  text-decoration: underline;
 }
 
 .notification-content {

@@ -128,11 +128,11 @@ const getCurrentUserId = () => {
 const loadResourceDetail = async () => {
   // 支持多种参数方式：festival_name, entity_name, id+table
   const festivalName = route.query.festival_name || route.query.entity_name;
-  const resourceIdParam = route.query.id;
+  const resourceIdParam = route.query.id || route.query.resource_id;
   const tableParam = route.query.table;
-  const commentIdParam = route.query.comment_id;
+  const commentIdParam = route.query.comment_id || route.query.highlight_comment_id;
   
-  // 如果有comment_id，设置高亮
+  // 如果有comment_id或highlight_comment_id，设置高亮
   if (commentIdParam) {
     highlightCommentId.value = parseInt(commentIdParam);
   }
@@ -145,7 +145,12 @@ const loadResourceDetail = async () => {
 
   try {
     let response;
-    if (resourceIdParam && tableParam) {
+    // 检查是否有resource_id参数（从消息跳转时使用）
+    const resourceIdFromQuery = route.query.resource_id;
+    if (resourceIdFromQuery) {
+      // 使用resource_id参数查询（默认使用cultural_resources表）
+      response = await fetch(`/api/resource/detail?id=${resourceIdFromQuery}&table=cultural_resources`);
+    } else if (resourceIdParam && tableParam) {
       // 使用id和table参数查询
       response = await fetch(`/api/resource/detail?id=${resourceIdParam}&table=${tableParam}`);
     } else if (festivalName) {

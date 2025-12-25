@@ -254,6 +254,7 @@ class RAGBase:
                             results.append({
                                 "table": "cultural_resources",
                                 "id": row.get("id"),
+                                "resource_id": row.get("id"),  # 添加resource_id字段
                                 "title": row.get("title", ""),
                                 "content": content_text[:2000] if content_text else "",
                                 "source": row.get("source_from", ""),
@@ -296,6 +297,7 @@ class RAGBase:
                             results.append({
                                 "table": "cultural_entities",
                                 "id": row.get("id"),
+                                "resource_id": row.get("id"),  # 添加resource_id字段
                                 "title": row.get("entity_name", ""),
                                 "content": "；".join(content_parts) if content_parts else "",
                                 "source": row.get("source", ""),
@@ -319,6 +321,7 @@ class RAGBase:
                             results.append({
                                 "table": "entity_relationships",
                                 "id": row.get("id"),
+                                "resource_id": row.get("id"),  # 添加resource_id字段
                                 "title": f"{row.get('source_entity')} - {row.get('relationship_type')} - {row.get('target_entity')}",
                                 "content": row.get("relationship_evidence", ""),
                                 "source": "",
@@ -356,6 +359,7 @@ class RAGBase:
                             results.append({
                                 "table": "AIGC_cultural_resources",
                                 "id": row.get("id"),
+                                "resource_id": row.get("id"),  # 添加resource_id字段
                                 "title": row.get("title", ""),
                                 "content": content_text[:2000] if content_text else "",
                                 "source": row.get("source_from", ""),
@@ -462,6 +466,7 @@ class RAGBase:
                             results.append({
                                 "table": "cultural_resources_from_user",
                                 "id": row.get("id"),
+                                "resource_id": row.get("id"),  # 添加resource_id字段
                                 "title": row.get("title", ""),
                                 "content": content_text[:2000] if content_text else "",
                                 "source": row.get("source_from", "用户上传"),

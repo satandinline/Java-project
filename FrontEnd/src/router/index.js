@@ -10,6 +10,7 @@ import ResourceDetail from '../components/ResourceDetail.vue';
 import DashboardView from '../components/DashboardView.vue';
 import UserManagement from '../components/UserManagement.vue';
 import SecondaryCreationView from '../components/SecondaryCreationView.vue';
+import MessageView from '../components/MessageView.vue';
 
 const routes = [
   {
@@ -76,6 +77,12 @@ const routes = [
     path: '/secondary-creation',
     name: 'SecondaryCreation',
     component: SecondaryCreationView,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/messages',
+    name: 'Messages',
+    component: MessageView,
     meta: { requiresAuth: true }
   }
 ];

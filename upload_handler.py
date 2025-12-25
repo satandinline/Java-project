@@ -902,12 +902,14 @@ class ResourceUploader:
             if conn:
                 conn.close()
     
-    def get_annotation_tasks(self, user_id: int, status: Optional[str] = None) -> Dict[str, Any]:
+    def get_annotation_tasks(self, user_id: int, status: Optional[str] = None, page: int = 1, page_size: int = 12) -> Dict[str, Any]:
         """
-        获取标注任务列表
+        获取标注任务列表（支持分页）
         :param user_id: 用户ID
         :param status: 任务状态过滤，可选
-        :return: 任务列表
+        :param page: 页码（从1开始）
+        :param page_size: 每页数量
+        :return: 任务列表（包含分页信息）
         """
         conn = None
         try:
@@ -922,15 +924,8 @@ class ResourceUploader:
                     return {"success": False, "message": "用户不存在"}
                 user_role = user_result['role']
                 
-                # 根据resource_source字段关联不同的资源表
-                # 使用LEFT JOIN来同时支持三种资源来源（爬虫、用户上传、AIGC生成）
-                query = """
-                    SELECT t.id, t.resource_id, t.resource_source, t.task_type, t.status, t.annotation_method,
-                           COALESCE(cru.title, cr.title, aigc.title) as title,
-                           COALESCE(cru.resource_type, cr.resource_type, aigc.resource_type) as resource_type,
-                           COALESCE(cru.content_feature_data, cr.content_feature_data, aigc.content_feature_data) as content_feature_data,
-                           COALESCE(cru.upload_time, cr.upload_time, aigc.created_at) as upload_time,
-                           COALESCE(cru.storage_path, NULL) as storage_path
+                # 构建基础查询（用于计数和获取数据）
+                base_query = """
                     FROM annotation_tasks t
                     LEFT JOIN cultural_resources_from_user cru 
                         ON t.resource_id = cru.id AND t.resource_source = 'cultural_resources_from_user'
@@ -942,43 +937,104 @@ class ResourceUploader:
                 params = []
                 where_clauses = []
                 
-                # 普通用户只能看到自己上传的资源对应的任务
-                if user_role != '管理员':
-                    where_clauses.append("(cru.user_id = %s OR t.resource_source != 'cultural_resources_from_user')")
+                # 普通用户只能看到自己上传的资源对应的任务（只针对cultural_resources_from_user表）
+                # 管理员和超级管理员可以看到所有任务（包括cultural_resources_from_user和其他来源的资源）
+                if user_role != '管理员' and user_role != '超级管理员':
+                    where_clauses.append("(t.resource_source = 'cultural_resources_from_user' AND cru.user_id = %s)")
                     params.append(user_id)
+                # 注意：管理员可以看到所有来源的资源，包括cultural_resources、cultural_resources_from_user和AIGC_cultural_resources
+                # 但根据需求，AI标注功能应该只针对用户上传的资源（cultural_resources_from_user表）
                 
                 # 状态过滤
                 if status:
                     where_clauses.append("t.status = %s")
                     params.append(status)
                 
+                where_clause = ""
                 if where_clauses:
-                    query += " WHERE " + " AND ".join(where_clauses)
+                    where_clause = " WHERE " + " AND ".join(where_clauses)
                 
-                cursor.execute(query, params)
+                # 先获取总数
+                count_query = f"SELECT COUNT(*) as total {base_query} {where_clause}"
+                cursor.execute(count_query, params)
+                total_result = cursor.fetchone()
+                total = total_result['total'] if total_result else 0
+                total_pages = (total + page_size - 1) // page_size if total > 0 else 0
+                
+                # 获取分页数据
+                data_query = f"""
+                    SELECT t.id, t.resource_id, t.resource_source, t.task_type, t.status, t.annotation_method,
+                           COALESCE(cru.title, cr.title, aigc.title) as title,
+                           COALESCE(cru.resource_type, cr.resource_type, aigc.resource_type) as resource_type,
+                           COALESCE(cru.content_feature_data, cr.content_feature_data, aigc.content_feature_data) as content_feature_data,
+                           COALESCE(cru.storage_path, NULL) as storage_path,
+                           t.created_at, t.updated_at
+                    {base_query}
+                    {where_clause}
+                    ORDER BY t.created_at DESC
+                    LIMIT %s OFFSET %s
+                """
+                offset = (page - 1) * page_size
+                cursor.execute(data_query, params + [page_size, offset])
                 tasks = cursor.fetchall()
                 
-                # 处理任务数据，添加文件名信息（对于用户上传的资源）
+                # 处理任务数据，添加文件名和资源内容信息
                 processed_tasks = []
                 for task in tasks:
                     task_dict = dict(task)
-                    # 如果是用户上传的资源，从content_feature_data中提取文件名信息
-                    if task_dict.get('resource_source') == 'cultural_resources_from_user' and task_dict.get('content_feature_data'):
+                    
+                    # 解析content_feature_data，提取资源内容
+                    content_feature_data = task_dict.get('content_feature_data')
+                    if content_feature_data:
                         try:
-                            content_data = json.loads(task_dict['content_feature_data'] or '{}')
-                            # 添加文件名信息，便于前端展示和排序
-                            task_dict['file_name'] = content_data.get('stored_file_name') or content_data.get('file_name', '')
-                            task_dict['original_file_name'] = content_data.get('original_file_name', '')
-                            task_dict['upload_username'] = content_data.get('user_account', '')
+                            if isinstance(content_feature_data, str):
+                                content_data = json.loads(content_feature_data)
+                            else:
+                                content_data = content_feature_data
+                            
+                            # 提取文本预览（用于文本资源）
+                            task_dict['content_preview'] = content_data.get('content_preview', '') or content_data.get('text', '')[:200]  # 最多200字符
+                            
+                            # 提取完整文本内容（用于文本资源）
+                            task_dict['content_full'] = content_data.get('content_full', '') or content_data.get('text', '')
+                            
+                            # 提取图片文件信息（用于图像资源）
+                            stored_file_name = content_data.get('stored_file_name') or content_data.get('file_name', '')
+                            if stored_file_name:
+                                task_dict['image_url'] = f"/api/uploads/{stored_file_name}"
+                                task_dict['original_file_name'] = content_data.get('original_file_name', stored_file_name)
+                            
+                            # 其他元数据
+                            task_dict['file_name'] = stored_file_name
                             task_dict['upload_date'] = content_data.get('upload_date', '')
                             task_dict['upload_time'] = content_data.get('upload_time', '')
-                            task_dict['content_preview'] = content_data.get('content_preview', '')
-                        except:
-                            pass
+                        except Exception as e:
+                            print(f"解析content_feature_data失败: {e}")
+                            task_dict['content_preview'] = ''
+                            task_dict['image_url'] = None
+                    
+                    # 如果资源类型是图像，确保有图片URL
+                    if task_dict.get('resource_type') == '图像' and not task_dict.get('image_url'):
+                        storage_path = task_dict.get('storage_path')
+                        if storage_path:
+                            # 从storage_path构建URL
+                            if 'uploads' in storage_path:
+                                file_name = storage_path.split('uploads/')[-1] if 'uploads/' in storage_path else storage_path.split('/')[-1]
+                                task_dict['image_url'] = f"/api/uploads/{file_name}"
+                    
                     processed_tasks.append(task_dict)
                 
-                return {"success": True, "tasks": processed_tasks}
+                return {
+                    "success": True, 
+                    "tasks": processed_tasks,
+                    "total": total,
+                    "page": page,
+                    "page_size": page_size,
+                    "total_pages": total_pages
+                }
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return {"success": False, "message": f"获取任务失败: {str(e)}"}
         finally:
             if conn:

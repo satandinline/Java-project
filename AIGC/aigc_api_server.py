@@ -1517,16 +1517,31 @@ def aigc_chat():
                 # 获取检索到的资源
                 retrieved_resources = result.get('retrieved_resources', {})
                 
-                # 从检索结果中提取资源ID列表
+                # 从检索结果中提取资源ID列表（包括database_results和vector_results）
                 retrieval_ids = []
                 try:
+                    # 从数据库检索结果中提取
                     database_results = retrieved_resources.get('database_results', [])
                     for db_result in database_results:
-                        resource_id = db_result.get('resource_id')
+                        resource_id = db_result.get('resource_id') or db_result.get('id')
                         if resource_id:
                             retrieval_ids.append(str(resource_id))
+                    
+                    # 从向量检索结果中提取
+                    vector_results = retrieved_resources.get('vector_results', [])
+                    for vec_result in vector_results:
+                        resource_id = vec_result.get('resource_id') or vec_result.get('metadata', {}).get('id')
+                        if resource_id:
+                            retrieval_ids.append(str(resource_id))
+                    
+                    # 去重
+                    retrieval_ids = list(set(retrieval_ids))
                     retrieval_id_str = ','.join(retrieval_ids) if retrieval_ids else None
+                    print(f"[AIGC] 提取到检索资源ID: {retrieval_id_str}")
                 except Exception as e:
+                    import traceback
+                    print(f"[AIGC] 提取检索资源ID失败: {e}")
+                    print(f"[AIGC] 错误堆栈: {traceback.format_exc()}")
                     retrieval_id_str = None
                 
                 # 保存AIGC生成的文字资源到数据库
@@ -1679,22 +1694,34 @@ def aigc_chat():
                         import traceback
                         traceback.print_exc()
                 
-                # 第一步：先生成完整故事
+                # 检查用户是否明确要求生成连环画/漫画
+                is_comic_request = image_aigc_system._is_comic_request(user_original_query) if user_original_query else False
+                
+                # 第一步：如果用户要求生成连环画，先生成完整故事；否则直接使用用户提示词
                 story = ""
-                if rag_system:
+                story_retrieved_resources = {}
+                if is_comic_request and rag_system:
+                    # 用户明确要求生成连环画，先生成完整故事
                     story_result = rag_system.ask(
                         query=story_prompt,
                         image_paths=None,
                         use_history=False
                     )
                     story = story_result.get('answer', '')
+                    story_retrieved_resources = story_result.get('retrieved_resources', {})
                     if not story:
                         story = story_prompt
                 else:
+                    # 用户没有要求生成连环画，直接使用用户提示词
                     story = story_prompt
                 
-                # 第二步：根据完整故事生成连环画
-                final_prompt = f"根据以下完整故事创作一组连环画，要求画面精美、以假乱真，故事要连贯完整：\n\n{story}"
+                # 第二步：根据是否要求连环画决定生成方式
+                if is_comic_request:
+                    # 用户要求生成连环画，根据完整故事生成连环画
+                    final_prompt = f"根据以下完整故事创作一组连环画，要求画面精美、以假乱真，故事要连贯完整：\n\n{story}"
+                else:
+                    # 用户没有要求生成连环画，直接使用用户提示词生成单张图片
+                    final_prompt = story_prompt if story_prompt else "传统节日文化图像"
                 
                 # 从查询中提取风格（如果有）
                 style = "传统节日风格"
@@ -1703,12 +1730,13 @@ def aigc_chat():
                     pass
                 
                 
-                # 生成图片
+                # 生成图片（根据is_comic_request决定是否自动检测连环画）
                 try:
                     image_path = image_aigc_system.generate_image(
                         prompt=final_prompt,
                         style=style,
                         image_paths=image_paths if image_paths else None,
+                        auto_detect_comic=is_comic_request,  # 只在用户明确要求时才自动检测连环画
                         use_history=True
                     )
                 except Exception as gen_error:
@@ -1785,6 +1813,19 @@ def aigc_chat():
                                     "count": len(image_urls)
                                 }, ensure_ascii=False)
                                 
+                                # 从故事生成结果中提取检索资源ID
+                                retrieval_ids = []
+                                try:
+                                    database_results = story_retrieved_resources.get('database_results', [])
+                                    for db_result in database_results:
+                                        resource_id = db_result.get('resource_id') or db_result.get('id')
+                                        if resource_id:
+                                            retrieval_ids.append(str(resource_id))
+                                    retrieval_ids = list(set(retrieval_ids))
+                                    retrieval_id_str = ','.join(retrieval_ids) if retrieval_ids else None
+                                except Exception as e:
+                                    retrieval_id_str = None
+                                
                                 # 使用save_aigc_message_to_db更新消息
                                 save_aigc_message_to_db(
                                     user_id=user_id,
@@ -1794,6 +1835,7 @@ def aigc_chat():
                                     model='image',
                                     image_url=comic_data_json,
                                     image_from_users_url=image_from_users_url_json,
+                                    retrieval_id=retrieval_id_str,  # 添加检索资源ID
                                     message_id=message_id,  # 使用message_id更新现有消息
                                     db_config=db_config
                                 )
@@ -1856,6 +1898,19 @@ def aigc_chat():
                         image_from_users_url_json = json.dumps(user_uploaded_image_urls, ensure_ascii=False) if user_uploaded_image_urls else None
                         if session_id and message_id:
                             try:
+                                # 从故事生成结果中提取检索资源ID
+                                retrieval_ids = []
+                                try:
+                                    database_results = story_retrieved_resources.get('database_results', [])
+                                    for db_result in database_results:
+                                        resource_id = db_result.get('resource_id') or db_result.get('id')
+                                        if resource_id:
+                                            retrieval_ids.append(str(resource_id))
+                                    retrieval_ids = list(set(retrieval_ids))
+                                    retrieval_id_str = ','.join(retrieval_ids) if retrieval_ids else None
+                                except Exception as e:
+                                    retrieval_id_str = None
+                                
                                 # 使用save_aigc_message_to_db更新消息
                                 save_aigc_message_to_db(
                                     user_id=user_id,
@@ -1865,6 +1920,7 @@ def aigc_chat():
                                     model='image',
                                     image_url=image_url,
                                     image_from_users_url=image_from_users_url_json,
+                                    retrieval_id=retrieval_id_str,  # 添加检索资源ID
                                     message_id=message_id,  # 使用message_id更新现有消息
                                     db_config=db_config
                                 )
@@ -4173,7 +4229,7 @@ def update_session_summary(session_id):
 
 @app.route('/api/annotation/tasks', methods=['GET'])
 def get_annotation_tasks():
-    """获取标注任务列表"""
+    """获取标注任务列表（支持分页）"""
     try:
         # 获取用户ID
         user_id = request.headers.get('X-User-Id') or request.headers.get('X-User-ID') or request.args.get('user_id')
@@ -4188,6 +4244,14 @@ def get_annotation_tasks():
         # 获取状态过滤参数（支持：待标注、AI标注中、AI标注完成、已完成）
         status = request.args.get('status', '').strip()
         
+        # 获取分页参数
+        page = int(request.args.get('page', 1))
+        page_size = int(request.args.get('page_size', 12))
+        if page < 1:
+            page = 1
+        if page_size < 1:
+            page_size = 12
+        
         # 创建ResourceUploader实例来获取任务
         user_db_config = get_auth_system().get_user_db_config(user_id)
         if not user_db_config:
@@ -4196,13 +4260,17 @@ def get_annotation_tasks():
         db_config = user_db_config['db_config']
         uploader = ResourceUploader(user_id=user_id, db_config=db_config)
         
-        # 获取任务列表
-        result = uploader.get_annotation_tasks(user_id, status if status else None)
+        # 获取任务列表（带分页）
+        result = uploader.get_annotation_tasks(user_id, status if status else None, page=page, page_size=page_size)
         
         if result['success']:
             return jsonify({
                 'success': True,
-                'tasks': result['tasks']
+                'tasks': result['tasks'],
+                'total': result.get('total', len(result['tasks'])),
+                'page': page,
+                'page_size': page_size,
+                'total_pages': result.get('total_pages', 1)
             })
         else:
             return jsonify(result), 500
@@ -4299,20 +4367,51 @@ def get_annotation_details(task_id):
                     }
                 
                 # 解析资源内容
-                content_data = json.loads(task['content_feature_data'] or '{}')
+                content_data_str = task.get('content_feature_data')
+                if not content_data_str:
+                    content_data = {}
+                else:
+                    try:
+                        if isinstance(content_data_str, str):
+                            content_data = json.loads(content_data_str)
+                        else:
+                            content_data = content_data_str
+                    except (json.JSONDecodeError, TypeError):
+                        content_data = {}
+                
+                resource_type = task.get('resource_type', '')
+                
+                # 获取文本内容（优先使用完整内容，如果没有则使用预览）
+                resource_content = ''
+                if resource_type == '文本':
+                    # 优先使用完整文本内容
+                    resource_content = (content_data.get('content_full', '') or 
+                                       content_data.get('text', '') or 
+                                       content_data.get('content_preview', ''))
+                elif resource_type == '图像':
+                    # 图像资源可能没有文本内容，但可能有描述
+                    resource_content = content_data.get('description', '') or content_data.get('content_preview', '')
+                else:
+                    # 其他类型资源
+                    resource_content = (content_data.get('content_full', '') or 
+                                       content_data.get('text', '') or 
+                                       content_data.get('content_preview', ''))
+                
+                # 获取图片URL
                 stored_file_name = content_data.get('stored_file_name') or content_data.get('file_name', '')
                 resource_image_url = None
                 if stored_file_name:
-                    # 前端通过该URL即可预览用户上传的文件（目前主要是图片）
-                    resource_image_url = f"/uploads/{stored_file_name}"
+                    # 使用相对路径，前端代理会处理
+                    resource_image_url = f"/api/uploads/{stored_file_name}"
                 
                 return jsonify({
                     'success': True,
                     'task_id': task_id,
                     'resource_id': task['resource_id'],
-                    'title': task['title'],
-                    'status': task['status'],
-                    'resource_content': content_data.get('content_preview', ''),
+                    'title': task.get('title', ''),
+                    'resource_type': resource_type,
+                    'status': task.get('status', ''),
+                    'resource_content': resource_content,
                     'resource_image_url': resource_image_url,
                     'annotations': annotations
                 })
@@ -4576,44 +4675,56 @@ def pause_ai_annotation(task_id):
     """暂停AI标注（仅管理员和超级管理员）"""
     try:
         # 获取用户ID（支持多种header格式）
-        user_id = (request.headers.get('X-User-Id') or 
-                  request.headers.get('X-User-ID') or 
-                  (request.json.get('user_id') if request.is_json else None))
-        if not user_id:
+        user_id_str = (request.headers.get('X-User-Id') or 
+                      request.headers.get('X-User-ID') or 
+                      (request.json.get('user_id') if request.is_json else None))
+        if not user_id_str:
             return jsonify({'success': False, 'message': '缺少用户信息'}), 400
         
-        try:
-            user_id = int(user_id)
-        except (ValueError, TypeError):
-            return jsonify({'success': False, 'message': '无效的用户ID'}), 400
+        # 处理可能的重复header值（如"1, 1"），只取第一个值
+        if ',' in str(user_id_str):
+            user_id_str = str(user_id_str).split(',')[0].strip()
         
-        # 检查用户权限
-        from db_connection import get_user_db_connection
+        try:
+            user_id = int(user_id_str)
+        except (ValueError, TypeError) as e:
+            return jsonify({'success': False, 'message': f'无效的用户ID: {user_id_str}'}), 400
+        
+        # 检查用户权限（使用auth_system获取用户信息）
+        auth_system = get_auth_system()
+        try:
+            user_info = auth_system.get_user_by_id(user_id)
+            if not user_info:
+                return jsonify({'success': False, 'message': f'用户不存在: user_id={user_id}'}), 404
+            
+            role = user_info.get('role')
+            if role != '管理员' and role != '超级管理员':
+                return jsonify({'success': False, 'message': '权限不足，仅管理员可操作'}), 403
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return jsonify({'success': False, 'message': f'获取用户信息失败: {str(e)}'}), 500
+        
+        # 检查任务状态（使用默认数据库连接，因为annotation_tasks表是共享的）
+        from db_connection import get_default_db_connection
         from pymysql.cursors import DictCursor
-        conn = get_user_db_connection()
+        conn = get_default_db_connection()
         if not conn:
             return jsonify({'success': False, 'message': '数据库连接失败'}), 500
         
         try:
             with conn.cursor(DictCursor) as cursor:
-                cursor.execute("SELECT role FROM users WHERE id = %s", (user_id,))
-                user_info = cursor.fetchone()
-                if not user_info:
-                    return jsonify({'success': False, 'message': '用户不存在'}), 404
-                
-                # 兼容DictCursor和普通cursor
-                role = user_info.get('role') if isinstance(user_info, dict) else (user_info[0] if user_info else None)
-                if role != '管理员' and role != '超级管理员':
-                    return jsonify({'success': False, 'message': '权限不足，仅管理员可操作'}), 403
-                
                 # 检查任务状态
                 cursor.execute("SELECT status FROM annotation_tasks WHERE id = %s", (task_id,))
                 task = cursor.fetchone()
                 if not task:
                     return jsonify({'success': False, 'message': '任务不存在'}), 404
                 
-                # 兼容DictCursor和普通cursor
-                current_status = task.get('status') if isinstance(task, dict) else (task[0] if task else None)
+                # DictCursor返回字典格式
+                current_status = task.get('status') if isinstance(task, dict) else None
+                if not current_status:
+                    return jsonify({'success': False, 'message': '无法获取任务状态'}), 500
+                    
                 if current_status != 'AI标注中':
                     return jsonify({'success': False, 'message': f'任务当前状态为{current_status}，无法暂停'}), 400
                 
@@ -4629,7 +4740,7 @@ def pause_ai_annotation(task_id):
                     task_check = cursor.fetchone()
                     if not task_check:
                         return jsonify({'success': False, 'message': '任务不存在'}), 404
-                    current_status = task_check.get('status') if isinstance(task_check, dict) else (task_check[0] if task_check else None)
+                    current_status = task_check.get('status') if isinstance(task_check, dict) else None
                     return jsonify({'success': False, 'message': f'更新失败，任务当前状态为{current_status}，无法暂停'}), 400
                 
                 conn.commit()
@@ -4647,16 +4758,20 @@ def start_ai_annotation(task_id):
     """启动AI标注（仅管理员和超级管理员）"""
     try:
         # 获取用户ID（支持多种header格式）
-        user_id = (request.headers.get('X-User-Id') or 
-                  request.headers.get('X-User-ID') or 
-                  (request.json.get('user_id') if request.is_json else None))
-        if not user_id:
+        user_id_str = (request.headers.get('X-User-Id') or 
+                      request.headers.get('X-User-ID') or 
+                      (request.json.get('user_id') if request.is_json else None))
+        if not user_id_str:
             return jsonify({'success': False, 'message': '缺少用户信息'}), 400
         
+        # 处理可能的重复header值（如"1, 1"），只取第一个值
+        if ',' in str(user_id_str):
+            user_id_str = str(user_id_str).split(',')[0].strip()
+        
         try:
-            user_id = int(user_id)
-        except (ValueError, TypeError):
-            return jsonify({'success': False, 'message': '无效的用户ID'}), 400
+            user_id = int(user_id_str)
+        except (ValueError, TypeError) as e:
+            return jsonify({'success': False, 'message': f'无效的用户ID: {user_id_str}'}), 400
         
         # 检查用户权限
         from db_connection import get_user_db_connection
@@ -4837,7 +4952,23 @@ def get_comments():
                         WHERE r.comment_id = %s
                         ORDER BY r.created_at ASC
                     """, (comment['id'],))
-                    comment['replies'] = cursor.fetchall()
+                    replies = cursor.fetchall()
+                    
+                    # 为每个回复添加点赞数
+                    for reply in replies:
+                        try:
+                            cursor.execute("""
+                                SELECT COUNT(*) as like_count 
+                                FROM reply_likes 
+                                WHERE reply_id = %s
+                            """, (reply['id'],))
+                            like_result = cursor.fetchone()
+                            reply['like_count'] = like_result['like_count'] if like_result else 0
+                        except:
+                            # 如果reply_likes表不存在，点赞数为0
+                            reply['like_count'] = 0
+                    
+                    comment['replies'] = replies
                 
                 return jsonify({
                     'success': True,
@@ -5009,6 +5140,98 @@ def like_comment(comment_id):
         return jsonify({'success': False, 'message': f'点赞失败：{str(e)}'}), 500
 
 
+@app.route('/api/replies/<int:reply_id>/like', methods=['POST'])
+def like_reply(reply_id):
+    """点赞/取消点赞回复"""
+    try:
+        data = request.json
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            return jsonify({'success': False, 'message': '缺少用户信息'}), 400
+        
+        from db_connection import get_user_db_connection
+        from pymysql.cursors import DictCursor
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor(DictCursor) as cursor:
+                # 检查回复是否存在
+                cursor.execute("SELECT id, reply_user_id FROM comment_replies WHERE id = %s", (reply_id,))
+                reply = cursor.fetchone()
+                if not reply:
+                    return jsonify({'success': False, 'message': '回复不存在'}), 404
+                
+                # 检查是否已点赞
+                cursor.execute("""
+                    SELECT id FROM reply_likes 
+                    WHERE reply_id = %s AND user_id = %s
+                """, (reply_id, user_id))
+                existing_like = cursor.fetchone()
+                
+                action = 'liked'
+                if existing_like:
+                    # 取消点赞
+                    cursor.execute("DELETE FROM reply_likes WHERE reply_id = %s AND user_id = %s", (reply_id, user_id))
+                    action = 'unliked'
+                else:
+                    # 添加点赞
+                    try:
+                        cursor.execute("""
+                            INSERT INTO reply_likes (reply_id, user_id)
+                            VALUES (%s, %s)
+                        """, (reply_id, user_id))
+                    except Exception as e:
+                        # 如果reply_likes表不存在，创建它
+                        if 'reply_likes' in str(e).lower():
+                            cursor.execute("""
+                                CREATE TABLE IF NOT EXISTS reply_likes (
+                                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                                    reply_id BIGINT NOT NULL,
+                                    user_id BIGINT NOT NULL,
+                                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                    UNIQUE KEY uk_reply_user (reply_id, user_id),
+                                    INDEX idx_reply_id (reply_id),
+                                    INDEX idx_user_id (user_id)
+                                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                            """)
+                            cursor.execute("""
+                                INSERT INTO reply_likes (reply_id, user_id)
+                                VALUES (%s, %s)
+                            """, (reply_id, user_id))
+                        else:
+                            raise
+                
+                conn.commit()
+                
+                # 获取当前点赞数
+                try:
+                    cursor.execute("""
+                        SELECT COUNT(*) as like_count 
+                        FROM reply_likes 
+                        WHERE reply_id = %s
+                    """, (reply_id,))
+                    result = cursor.fetchone()
+                    like_count = result['like_count'] if result else 0
+                except:
+                    like_count = 0
+                
+                return jsonify({
+                    'success': True,
+                    'action': action,
+                    'like_count': like_count
+                })
+        finally:
+            if conn:
+                conn.close()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'点赞失败：{str(e)}'}), 500
+
+
 @app.route('/api/comments/<int:comment_id>/reply', methods=['POST'])
 def reply_comment(comment_id):
     """回复评论"""
@@ -5090,12 +5313,19 @@ def reply_comment(comment_id):
 
 @app.route('/api/notifications', methods=['GET'])
 def get_notifications():
-    """获取用户的通知列表"""
+    """获取用户的通知列表（支持分页）"""
     user_id = request.args.get('user_id', type=int)
     is_read = request.args.get('is_read', type=int)
+    page = request.args.get('page', 1, type=int)
+    page_size = request.args.get('page_size', 20, type=int)
     
     if not user_id:
         return jsonify({'success': False, 'message': '缺少user_id参数'}), 400
+    
+    if page < 1:
+        page = 1
+    if page_size < 1:
+        page_size = 20
     
     try:
         from db_connection import get_user_db_connection
@@ -5106,22 +5336,39 @@ def get_notifications():
         try:
             with conn.cursor(DictCursor) as cursor:
                 # 构建查询条件
-                query = "SELECT * FROM notifications WHERE user_id = %s"
+                base_query = "SELECT * FROM notifications WHERE user_id = %s"
                 params = [user_id]
                 
                 if is_read is not None:
-                    query += " AND is_read = %s"
+                    base_query += " AND is_read = %s"
                     params.append(is_read)
                 
-                query += " ORDER BY created_at DESC"
-                # 不限制返回条数，移除LIMIT子句
+                # 先获取总数
+                count_query = f"SELECT COUNT(*) as total FROM ({base_query}) as t"
+                cursor.execute(count_query, params)
+                total_result = cursor.fetchone()
+                total = total_result['total'] if total_result else 0
+                total_pages = (total + page_size - 1) // page_size if total > 0 else 0
                 
-                cursor.execute(query, params)
+                # 获取未读数量
+                cursor.execute("SELECT COUNT(*) as unread_count FROM notifications WHERE user_id = %s AND is_read = 0", (user_id,))
+                unread_result = cursor.fetchone()
+                unread_count = unread_result['unread_count'] if unread_result else 0
+                
+                # 获取分页数据
+                query = f"{base_query} ORDER BY created_at DESC LIMIT %s OFFSET %s"
+                offset = (page - 1) * page_size
+                cursor.execute(query, params + [page_size, offset])
                 notifications = cursor.fetchall()
                 
                 return jsonify({
                     'success': True,
-                    'notifications': notifications
+                    'notifications': notifications,
+                    'total': total,
+                    'page': page,
+                    'page_size': page_size,
+                    'total_pages': total_pages,
+                    'unread_count': unread_count
                 })
         finally:
             if conn:
@@ -5318,17 +5565,61 @@ def get_aigc_resources():
         return jsonify({'success': False, 'message': f'获取资源失败：{str(e)}'}), 500
 
 
-@app.route('/api/comments/<int:comment_id>/resource-id', methods=['GET'])
-def get_comment_resource_id(comment_id):
-    """获取评论对应的资源ID"""
+@app.route('/api/comments/<int:comment_id>', methods=['GET'])
+def get_comment(comment_id):
+    """获取单个评论信息"""
     try:
         from db_connection import get_user_db_connection
+        from pymysql.cursors import DictCursor
         conn = get_user_db_connection()
         if not conn:
             return jsonify({'success': False, 'message': '数据库连接失败'}), 500
         
         try:
-            with conn.cursor() as cursor:
+            with conn.cursor(DictCursor) as cursor:
+                cursor.execute("""
+                    SELECT 
+                        c.id,
+                        c.resource_id,
+                        c.user_id,
+                        c.comment_content,
+                        c.created_at,
+                        u.account,
+                        u.nickname,
+                        u.avatar_path
+                    FROM user_comments c
+                    LEFT JOIN users u ON c.user_id = u.id
+                    WHERE c.id = %s
+                """, (comment_id,))
+                comment = cursor.fetchone()
+                
+                if not comment:
+                    return jsonify({'success': False, 'message': '评论不存在'}), 404
+                
+                return jsonify({
+                    'success': True,
+                    'comment': comment
+                })
+        finally:
+            if conn:
+                conn.close()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'获取评论失败：{str(e)}'}), 500
+
+@app.route('/api/comments/<int:comment_id>/resource-id', methods=['GET'])
+def get_comment_resource_id(comment_id):
+    """获取评论对应的资源ID（向后兼容）"""
+    try:
+        from db_connection import get_user_db_connection
+        from pymysql.cursors import DictCursor
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor(DictCursor) as cursor:
                 cursor.execute("""
                     SELECT resource_id 
                     FROM user_comments 
@@ -5339,7 +5630,7 @@ def get_comment_resource_id(comment_id):
                 if result:
                     return jsonify({
                         'success': True,
-                        'resource_id': result['resource_id']
+                        'resource_id': result.get('resource_id')
                     })
                 else:
                     return jsonify({
@@ -5352,7 +5643,7 @@ def get_comment_resource_id(comment_id):
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'message': f'获取评论资源ID失败：{str(e)}'}), 500
+        return jsonify({'success': False, 'message': f'获取失败：{str(e)}'}), 500
 
 
 @app.route('/api/admin/dashboard/statistics', methods=['GET'])

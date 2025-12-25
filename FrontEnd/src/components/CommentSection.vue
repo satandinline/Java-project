@@ -90,6 +90,7 @@
             v-for="reply in comment.replies" 
             :key="reply.id"
             class="reply-item"
+            :id="`reply-${reply.id}`"
           >
             <img 
               :src="reply.avatar_path || '/default.jpg'" 
@@ -102,6 +103,46 @@
                 <span class="reply-time">{{ formatTime(reply.created_at) }}</span>
               </div>
               <div class="reply-content">{{ reply.reply_content }}</div>
+              <div class="reply-actions">
+                <button 
+                  class="like-btn"
+                  :class="{ liked: isLikedReply(reply.id) }"
+                  @click.stop="toggleReplyLike(reply.id)"
+                >
+                  👍 {{ reply.like_count || 0 }}
+                </button>
+                <button 
+                  class="reply-btn"
+                  @click.stop="showReplyToReplyInput(comment.id, reply.id)"
+                >
+                  回复
+                </button>
+              </div>
+              
+              <!-- 回复的回复输入框 -->
+              <div v-if="replyingToReply === reply.id" class="reply-to-reply-input-area">
+                <textarea
+                  v-model="newReplyToReply"
+                  placeholder="写下你的回复..."
+                  class="reply-textarea"
+                  rows="2"
+                ></textarea>
+                <div class="reply-actions">
+                  <button 
+                    class="submit-btn" 
+                    @click="submitReplyToReply(comment.id, reply.id)"
+                    :disabled="!newReplyToReply.trim() || isSubmitting"
+                  >
+                    发送
+                  </button>
+                  <button 
+                    class="cancel-btn" 
+                    @click="cancelReplyToReply"
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -137,9 +178,12 @@ const emit = defineEmits(['close']);
 const comments = ref([]);
 const newComment = ref('');
 const newReply = ref('');
+const newReplyToReply = ref('');
 const replyingTo = ref(null);
+const replyingToReply = ref(null);
 const isSubmitting = ref(false);
 const likedComments = ref(new Set());
+const likedReplies = ref(new Set());
 
 // 加载评论列表
 const loadComments = async () => {
@@ -498,6 +542,10 @@ onMounted(() => {
 .reply-item {
   display: flex;
   margin-bottom: 10px;
+  padding: 10px;
+  background: #f9f9f9;
+  border-radius: 5px;
+  position: relative;
 }
 
 .reply-avatar {
@@ -505,6 +553,7 @@ onMounted(() => {
   height: 30px;
   border-radius: 50%;
   margin-right: 10px;
+  flex-shrink: 0;
 }
 
 .reply-content-wrapper {
@@ -530,6 +579,22 @@ onMounted(() => {
 .reply-content {
   font-size: 14px;
   line-height: 1.5;
+  margin-bottom: 5px;
+}
+
+.reply-item .reply-actions {
+  display: flex;
+  gap: 15px;
+  margin-top: 8px;
+  align-items: center;
+}
+
+.reply-to-reply-input-area {
+  margin-top: 10px;
+  padding: 10px;
+  background: #fff;
+  border-radius: 5px;
+  border: 1px solid #e0e0e0;
 }
 
 .empty-comments {

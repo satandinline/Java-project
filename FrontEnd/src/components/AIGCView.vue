@@ -5,7 +5,6 @@
       <button class="forum-btn" @click="toggleComments">
         <span class="forum-icon">💬</span>
         评论
-        <span v-if="unreadNotifications > 0" class="notification-badge">{{ unreadNotifications }}</span>
       </button>
     </div>
 

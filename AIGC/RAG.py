@@ -571,7 +571,7 @@ class CulturalResourceRAG(RAGBase):
         except Exception as e:
             print(f"记录性能日志失败: {e}")
 
-        # 7. 整理检索到的资源信息
+        # 7. 整理检索到的资源信息，确保包含resource_id
         retrieved_resources = {
             "vector_results": [],
             "database_results": db_results,
@@ -581,10 +581,18 @@ class CulturalResourceRAG(RAGBase):
         # 向量库结果
         if vector_docs:
             for doc in vector_docs:
+                metadata = getattr(doc, "metadata", {})
                 retrieved_resources["vector_results"].append({
                     "content": getattr(doc, "page_content", str(doc))[:500],  # 限制长度
-                    "metadata": getattr(doc, "metadata", {})
+                    "metadata": metadata,
+                    "resource_id": metadata.get('id') or metadata.get('resource_id')  # 提取resource_id
                 })
+        
+        # 确保database_results包含resource_id字段
+        for db_result in db_results:
+            # 如果结果中没有resource_id，尝试从id字段获取
+            if 'resource_id' not in db_result and 'id' in db_result:
+                db_result['resource_id'] = db_result['id']
         
         # 网页爬取结果
         if web_docs:

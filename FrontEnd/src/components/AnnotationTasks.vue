@@ -3,7 +3,7 @@
     <h2>标注任务管理</h2>
     
     <div class="filter-bar">
-      <select v-model="statusFilter" @change="fetchTasks">
+      <select v-model="statusFilter" @change="() => { currentPage = 1; fetchTasks(1); }">
         <option value="">所有状态</option>
         <option value="待标注">待标注</option>
         <option value="AI标注中">AI标注中</option>
@@ -24,9 +24,6 @@
           <p>任务类型: {{ task.task_type }}</p>
           <p>标注方式: {{ task.annotation_method === 'ai' ? 'AI标注' : '人工标注' }}</p>
           <p v-if="task.original_file_name">文件名: {{ task.original_file_name }}</p>
-          <p v-if="task.content_preview && task.resource_type === '文本'">
-            文本预览: {{ task.content_preview.slice(0, 60) }}{{ task.content_preview.length > 60 ? '...' : '' }}
-          </p>
         </div>
         
         <div class="task-actions">
@@ -77,14 +74,26 @@
         
         <!-- 左侧：资源内容预览 -->
         <div class="resource-preview" v-if="currentResourceTitle || currentResourceContent || currentResourceImageUrl">
-          <h4>资源预览</h4>
+          <h4>资源内容</h4>
           <p v-if="currentResourceTitle"><strong>标题：</strong>{{ currentResourceTitle }}</p>
-          <div v-if="currentResourceType === '文本' && currentResourceContent" class="resource-text">
-            {{ currentResourceContent }}
+          <p v-if="currentResourceType"><strong>资源类型：</strong>{{ currentResourceType }}</p>
+          
+          <!-- 文本资源内容 -->
+          <div v-if="currentResourceType === '文本' && currentResourceContent" class="resource-text-wrapper">
+            <p><strong>文本内容：</strong></p>
+            <div class="resource-text">{{ currentResourceContent }}</div>
           </div>
+          
+          <!-- 图像资源 -->
           <div v-if="currentResourceType === '图像' && currentResourceImageUrl" class="resource-image-wrapper">
+            <p><strong>图片：</strong></p>
             <img :src="currentResourceImageUrl" alt="资源图片预览" class="resource-image" />
           </div>
+          
+          <!-- 如果既没有文本也没有图片 -->
+          <p v-if="!currentResourceContent && !currentResourceImageUrl" class="no-resource-content">
+            暂无资源内容
+          </p>
         </div>
         
         <div class="annotation-content">
@@ -226,6 +235,27 @@
         </div>
       </div>
     </div>
+    
+    <!-- 分页控件 -->
+    <div class="pagination" v-if="totalPages > 1">
+      <button 
+        @click="goToPage(currentPage - 1)" 
+        :disabled="currentPage === 1"
+        class="page-btn"
+      >
+        上一页
+      </button>
+      <span class="page-info">
+        第 {{ currentPage }} / {{ totalPages }} 页（共 {{ total }} 条）
+      </span>
+      <button 
+        @click="goToPage(currentPage + 1)" 
+        :disabled="currentPage >= totalPages"
+        class="page-btn"
+      >
+        下一页
+      </button>
+    </div>
   </div>
 </template>
 
@@ -243,6 +273,11 @@ const currentResourceTitle = ref('');
 const currentResourceType = ref('');
 const currentResourceContent = ref('');
 const currentResourceImageUrl = ref('');
+// 分页相关
+const currentPage = ref(1);
+const pageSize = ref(12);
+const total = ref(0);
+const totalPages = ref(0);
 
 const currentAnnotation = ref({
   // 新字段结构
@@ -268,7 +303,7 @@ onMounted(() => {
   isAdmin.value = userInfo && (userInfo.role === '管理员' || userInfo.role === '超级管理员');
 });
 
-const fetchTasks = async () => {
+const fetchTasks = async (page = 1) => {
   const userInfo = JSON.parse(localStorage.getItem('userInfo'));
   if (!userInfo || !userInfo.id) {
     tasks.value = [];
@@ -276,7 +311,16 @@ const fetchTasks = async () => {
   }
   
   try {
-    const response = await fetch(`/api/annotation/tasks?user_id=${userInfo.id}${statusFilter.value ? `&status=${statusFilter.value}` : ''}`, {
+    const params = new URLSearchParams({
+      user_id: userInfo.id.toString(),
+      page: page.toString(),
+      page_size: pageSize.value.toString()
+    });
+    if (statusFilter.value) {
+      params.append('status', statusFilter.value);
+    }
+    
+    const response = await fetch(`/api/annotation/tasks?${params.toString()}`, {
       method: 'GET',
       headers: {
         'X-User-Id': userInfo.id.toString(),
@@ -294,13 +338,32 @@ const fetchTasks = async () => {
         resource_type: task.resource_type || '未知',
         task_type: task.task_type || '实体',
         status: task.status || '待标注',
-        annotation_method: task.annotation_method || 'ai'
+        annotation_method: task.annotation_method || 'ai',
+        content_preview: task.content_preview || '',
+        image_url: task.image_url || '',
+        original_file_name: task.original_file_name || ''
       }));
+      
+      // 更新分页信息
+      total.value = data.total || 0;
+      totalPages.value = data.total_pages || 1;
+      currentPage.value = data.page || page;
     } else {
       tasks.value = [];
+      total.value = 0;
+      totalPages.value = 0;
     }
   } catch (error) {
+    console.error('获取任务失败:', error);
     tasks.value = [];
+    total.value = 0;
+    totalPages.value = 0;
+  }
+};
+
+const goToPage = (page) => {
+  if (page >= 1 && page <= totalPages.value) {
+    fetchTasks(page);
   }
 };
 
@@ -324,6 +387,16 @@ const viewAnnotation = async (taskId) => {
       currentResourceType.value = data.resource_type || '';
       currentResourceContent.value = data.resource_content || '';
       currentResourceImageUrl.value = data.resource_image_url || '';
+      
+      // 调试输出
+      console.log('查看标注 - 资源数据:', {
+        title: currentResourceTitle.value,
+        resourceType: currentResourceType.value,
+        hasContent: !!currentResourceContent.value,
+        contentLength: currentResourceContent.value?.length || 0,
+        hasImageUrl: !!currentResourceImageUrl.value,
+        imageUrl: currentResourceImageUrl.value
+      });
 
       currentAnnotation.value = {
         entity_name: annotations.entity_name || '',
@@ -370,6 +443,16 @@ const editAnnotation = async (taskId) => {
       currentResourceType.value = data.resource_type || '';
       currentResourceContent.value = data.resource_content || '';
       currentResourceImageUrl.value = data.resource_image_url || '';
+      
+      // 调试输出
+      console.log('编辑标注 - 资源数据:', {
+        title: currentResourceTitle.value,
+        resourceType: currentResourceType.value,
+        hasContent: !!currentResourceContent.value,
+        contentLength: currentResourceContent.value?.length || 0,
+        hasImageUrl: !!currentResourceImageUrl.value,
+        imageUrl: currentResourceImageUrl.value
+      });
 
       currentAnnotation.value = {
         entity_name: annotations.entity_name || '',
@@ -438,7 +521,7 @@ const approveAnnotation = async (taskId) => {
     const data = await response.json();
     if (data.success) {
       alert('标注已审核通过，数据已迁移');
-      fetchTasks();
+      fetchTasks(currentPage.value);
     } else {
       alert('审核失败: ' + data.message);
     }
@@ -467,7 +550,7 @@ const rejectAnnotation = async (taskId) => {
     const data = await response.json();
     if (data.success) {
       alert('标注已驳回');
-      fetchTasks();
+      fetchTasks(currentPage.value);
     } else {
       alert('驳回失败: ' + data.message);
     }
@@ -492,8 +575,7 @@ const pauseAiAnnotation = async (taskId) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-User-Id': userInfo.id.toString(),
-        'X-User-ID': userInfo.id.toString()  // 同时发送两种格式，确保兼容性
+        'X-User-Id': userInfo.id.toString()
       }
     });
     
@@ -512,7 +594,7 @@ const pauseAiAnnotation = async (taskId) => {
     const data = await response.json();
     if (data.success) {
       alert('AI标注已暂停');
-      fetchTasks();
+      fetchTasks(currentPage.value);
     } else {
       alert('暂停失败: ' + (data.message || '未知错误'));
     }
@@ -537,8 +619,7 @@ const startAiAnnotation = async (taskId) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-User-Id': userInfo.id.toString(),
-        'X-User-ID': userInfo.id.toString()  // 同时发送两种格式，确保兼容性
+        'X-User-Id': userInfo.id.toString()
       }
     });
     
@@ -557,7 +638,7 @@ const startAiAnnotation = async (taskId) => {
     const data = await response.json();
     if (data.success) {
       alert('AI标注已启动');
-      fetchTasks();
+      fetchTasks(currentPage.value);
     } else {
       alert('启动失败: ' + (data.message || '未知错误'));
     }
@@ -606,7 +687,7 @@ const saveAnnotation = async () => {
     if (data.success) {
       alert('标注已保存');
       closeAnnotationModal();
-      fetchTasks();
+      fetchTasks(currentPage.value);
     } else {
       alert('保存失败: ' + data.message);
     }
@@ -840,13 +921,22 @@ const saveAnnotation = async () => {
   border: 1px solid #eee;
 }
 
+.resource-text-wrapper {
+  margin-top: 10px;
+}
+
 .resource-text {
   margin-top: 8px;
-  max-height: 200px;
+  max-height: 300px;
   overflow-y: auto;
   white-space: pre-wrap;
+  word-wrap: break-word;
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.6;
+  padding: 10px;
+  background-color: #f9f9f9;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
 }
 
 .resource-image-wrapper {
@@ -854,11 +944,73 @@ const saveAnnotation = async () => {
   text-align: center;
 }
 
+.no-resource-content {
+  color: #999;
+  font-style: italic;
+  margin-top: 10px;
+}
+
 .resource-image {
   max-width: 100%;
   max-height: 260px;
   border-radius: 4px;
   box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+}
+
+.resource-text-wrapper {
+  margin-top: 10px;
+}
+
+.resource-text {
+  margin-top: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-size: 14px;
+  line-height: 1.6;
+  padding: 10px;
+  background-color: #f9f9f9;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+}
+
+.no-resource-content {
+  color: #999;
+  font-style: italic;
+  margin-top: 10px;
+}
+
+/* 分页样式 */
+.pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-top: 20px;
+  gap: 15px;
+}
+
+.page-btn {
+  padding: 8px 16px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background-color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.page-btn:hover:not(:disabled) {
+  background-color: #f0f0f0;
+}
+
+.page-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.page-info {
+  font-size: 14px;
+  color: #666;
 }
 
 .annotation-actions {
