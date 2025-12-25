@@ -18,6 +18,20 @@ import java.util.UUID;
 
 /**
  * 文件上传控制器
+ * 
+ * 【注意】此控制器当前未被前端使用，且实现不完整（只有TODO注释）。
+ * 前端通过vite代理将所有 /api 请求转发到 http://localhost:7200（Python后端）。
+ * 实际使用的上传API在 Python 后端（AIGC/aigc_api_server.py）中实现，功能完整。
+ * 
+ * 此控制器保留用于：
+ * 1. 未来可能的Java后端迁移
+ * 2. 直接访问Java后端的场景（不通过前端代理）
+ * 
+ * 【待实现】需要完成以下功能：
+ * - 保存到数据库
+ * - 创建标注任务
+ * - 文件类型验证
+ * - 文件大小限制
  */
 @RestController
 @RequestMapping("/api")

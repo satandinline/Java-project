@@ -38,6 +38,20 @@
             编辑标注
           </button>
           <button 
+            @click="pauseAiAnnotation(task.id)" 
+            v-if="task.status === 'AI标注中' && isAdmin"
+            class="pause-btn"
+          >
+            暂停AI标注
+          </button>
+          <button 
+            @click="startAiAnnotation(task.id)" 
+            v-if="task.status === '待标注' && isAdmin"
+            class="start-btn"
+          >
+            启动AI标注
+          </button>
+          <button 
             @click="approveAnnotation(task.id)" 
             v-if="task.status === '已完成' && isAdmin"
             class="approve-btn"
@@ -257,7 +271,6 @@ onMounted(() => {
 const fetchTasks = async () => {
   const userInfo = JSON.parse(localStorage.getItem('userInfo'));
   if (!userInfo || !userInfo.id) {
-    console.error("用户未登录");
     tasks.value = [];
     return;
   }
@@ -284,11 +297,9 @@ const fetchTasks = async () => {
         annotation_method: task.annotation_method || 'ai'
       }));
     } else {
-      console.error("获取任务失败:", data.message || '未知错误');
       tasks.value = [];
     }
   } catch (error) {
-    console.error("获取任务失败:", error);
     tasks.value = [];
   }
 };
@@ -335,7 +346,6 @@ const viewAnnotation = async (taskId) => {
       alert('获取标注详情失败: ' + data.message);
     }
   } catch (error) {
-    console.error('获取标注详情失败:', error);
     alert('获取标注详情失败');
   }
 };
@@ -382,7 +392,6 @@ const editAnnotation = async (taskId) => {
       alert('获取标注详情失败: ' + data.message);
     }
   } catch (error) {
-    console.error('获取标注详情失败:', error);
     alert('获取标注详情失败');
   }
 };
@@ -434,7 +443,6 @@ const approveAnnotation = async (taskId) => {
       alert('审核失败: ' + data.message);
     }
   } catch (error) {
-    console.error('审核失败:', error);
     alert('审核失败');
   }
 };
@@ -464,8 +472,97 @@ const rejectAnnotation = async (taskId) => {
       alert('驳回失败: ' + data.message);
     }
   } catch (error) {
-    console.error('驳回失败:', error);
     alert('驳回失败');
+  }
+};
+
+const pauseAiAnnotation = async (taskId) => {
+  if (!confirm('确定要暂停此任务的AI标注吗？')) {
+    return;
+  }
+  
+  try {
+    const userInfo = JSON.parse(localStorage.getItem('userInfo'));
+    if (!userInfo || !userInfo.id) {
+      alert('请先登录');
+      return;
+    }
+    
+    const response = await fetch(`/api/annotation/tasks/${taskId}/pause`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': userInfo.id.toString(),
+        'X-User-ID': userInfo.id.toString()  // 同时发送两种格式，确保兼容性
+      }
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorData;
+      try {
+        errorData = JSON.parse(errorText);
+      } catch {
+        errorData = { message: errorText || `HTTP错误: ${response.status}` };
+      }
+      alert('暂停失败: ' + (errorData.message || '未知错误'));
+      return;
+    }
+    
+    const data = await response.json();
+    if (data.success) {
+      alert('AI标注已暂停');
+      fetchTasks();
+    } else {
+      alert('暂停失败: ' + (data.message || '未知错误'));
+    }
+  } catch (error) {
+    alert('暂停失败: ' + (error.message || '网络错误'));
+  }
+};
+
+const startAiAnnotation = async (taskId) => {
+  if (!confirm('确定要启动此任务的AI标注吗？')) {
+    return;
+  }
+  
+  try {
+    const userInfo = JSON.parse(localStorage.getItem('userInfo'));
+    if (!userInfo || !userInfo.id) {
+      alert('请先登录');
+      return;
+    }
+    
+    const response = await fetch(`/api/annotation/tasks/${taskId}/start-ai`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': userInfo.id.toString(),
+        'X-User-ID': userInfo.id.toString()  // 同时发送两种格式，确保兼容性
+      }
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorData;
+      try {
+        errorData = JSON.parse(errorText);
+      } catch {
+        errorData = { message: errorText || `HTTP错误: ${response.status}` };
+      }
+      alert('启动失败: ' + (errorData.message || '未知错误'));
+      return;
+    }
+    
+    const data = await response.json();
+    if (data.success) {
+      alert('AI标注已启动');
+      fetchTasks();
+    } else {
+      alert('启动失败: ' + (data.message || '未知错误'));
+    }
+  } catch (error) {
+    alert('启动失败: ' + (error.message || '网络错误'));
   }
 };
 
@@ -514,7 +611,6 @@ const saveAnnotation = async () => {
       alert('保存失败: ' + data.message);
     }
   } catch (error) {
-    console.error('保存标注失败:', error);
     alert('保存失败');
   }
 };
@@ -805,5 +901,23 @@ const saveAnnotation = async () => {
 
 .reject-btn:hover {
   background-color: #ff7875;
+}
+
+.pause-btn {
+  background-color: #faad14;
+  color: white;
+}
+
+.pause-btn:hover {
+  background-color: #ffc53d;
+}
+
+.start-btn {
+  background-color: #1890ff;
+  color: white;
+}
+
+.start-btn:hover {
+  background-color: #40a9ff;
 }
 </style>

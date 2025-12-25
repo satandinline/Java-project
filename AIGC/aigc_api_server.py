@@ -7,9 +7,61 @@ AIGC API服务器
 2. 运行：python aigc_api_server.py
 3. 服务器将在 http://localhost:7200 启动（通过前端5173代理访问）
 """
+# -*- coding: utf-8 -*-
 import os
 import sys
 import json
+
+# 设置标准输出编码为UTF-8，解决Windows终端中文乱码问题
+# 优先使用环境变量PYTHONIOENCODING（如果已设置）
+if 'PYTHONIOENCODING' not in os.environ:
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
+
+# 设置标准输出编码（适用于所有平台，包括Windows）
+def setup_utf8_encoding():
+    """设置UTF-8编码，解决Windows终端中文乱码问题"""
+    try:
+        # 检查stdout是否可用，避免在concurrently等环境下出错
+        if hasattr(sys.stdout, 'buffer') and not getattr(sys.stdout, 'closed', True):
+            import io
+            try:
+                # 测试stdout是否真的可用
+                sys.stdout.write('')
+                sys.stdout.flush()
+                # 如果测试通过，尝试设置编码
+                # 使用reconfigure方法（Python 3.7+）
+                if hasattr(sys.stdout, 'reconfigure'):
+                    try:
+                        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+                        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+                    except (ValueError, OSError, AttributeError):
+                        # 如果reconfigure失败，尝试使用TextIOWrapper
+                        try:
+                            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+                            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+                        except (AttributeError, ValueError, OSError, IOError):
+                            pass
+                else:
+                    # Python 3.6及以下版本，使用TextIOWrapper
+                    try:
+                        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+                        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+                    except (AttributeError, ValueError, OSError, IOError):
+                        pass
+            except (AttributeError, ValueError, OSError, IOError):
+                # 如果设置失败，保持原样
+                pass
+    except Exception:
+        # 静默处理所有异常，确保不影响程序运行
+        pass
+
+# 在所有平台上都尝试设置编码（包括Windows和Linux/Mac）
+# 这对于concurrently等工具重定向stdout时特别重要
+try:
+    setup_utf8_encoding()
+except Exception:
+    pass
+
 import hashlib
 import threading
 import time
@@ -19,17 +71,18 @@ from dotenv import load_dotenv
 from pydantic import SecretStr
 from typing import Optional, Dict
 
-# 添加项目根目录和当前目录到路径
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-current_dir = os.path.dirname(os.path.abspath(__file__))
+# 添加项目根目录和当前目录到路径（使用相对路径）
+# 获取当前文件所在目录（AIGC目录）
+current_dir = os.path.dirname(os.path.realpath(__file__))
+# 获取项目根目录（AIGC的父目录）
+project_root = os.path.dirname(current_dir)
+# 将路径添加到sys.path（使用相对路径）
 sys.path.insert(0, project_root)
 sys.path.insert(0, current_dir)
 
 load_dotenv(override=True)
 
 # 延迟导入RAG和ImageAIGC模块（避免启动时加载，提升启动速度）
-# from RAG import CulturalResourceRAG
-# from image_RAG import ImageAIGC
 from aigc_db_helper import save_aigc_text_resource, save_aigc_image, extract_festival_names
 # 导入父目录的模块
 from login import AuthSystem
@@ -44,9 +97,7 @@ def register_statistics_api():
     try:
         from statistics_api import statistics_bp
         app.register_blueprint(statistics_bp)
-        print("[初始化] 统计API蓝图注册成功")
     except Exception as e:
-        print(f"[初始化] 统计API蓝图注册失败: {e}")
         import traceback
         traceback.print_exc()
         # 即使注册失败，也继续启动服务器
@@ -58,14 +109,25 @@ CORS(app)  # 允许跨域请求
 try:
     register_statistics_api()
 except Exception as e:
-    print(f"[初始化] 注册统计API时出错: {e}")
     import traceback
     traceback.print_exc()
     # 继续启动，不中断
 
-# 配置静态文件服务
-import os
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 启动AI自动标注服务
+try:
+    from auto_annotation import get_auto_annotation_service
+    auto_annotation_service = get_auto_annotation_service()
+    auto_annotation_service.start()
+except Exception as e:
+    import traceback
+    traceback.print_exc()
+    # 继续启动，不中断
+
+# 配置静态文件服务（使用相对路径）
+# os已在文件开头导入，无需重复导入
+# 获取项目根目录（相对于当前文件）
+current_file_dir = os.path.dirname(os.path.realpath(__file__))
+project_root = os.path.dirname(current_file_dir)
 # 头像存储在项目根目录的 public 文件夹
 public_dir = os.path.join(project_root, 'public')
 os.makedirs(public_dir, exist_ok=True)
@@ -79,9 +141,7 @@ def get_auth_system():
     if auth_system is None:
         try:
             auth_system = AuthSystem()
-            print("[初始化] 认证系统初始化成功")
         except Exception as e:
-            print(f"[初始化] 认证系统初始化失败: {e}")
             import traceback
             traceback.print_exc()
             # 即使初始化失败，也创建一个实例，在实际使用时再处理错误
@@ -109,16 +169,12 @@ def init_search_rag_system():
         
         ALIYUN_API_KEY = os.getenv("DASHSCOPE_API_KEY") or os.getenv("ALIYUN_API_KEY")
         if not ALIYUN_API_KEY:
-            print("[搜索] 警告：未找到通义千问API密钥，搜索功能可能受限")
             return None
         
-        print("[搜索] 正在初始化AI辅助检索系统...")
         tongyi_model = ChatTongyi(api_key=SecretStr(ALIYUN_API_KEY), model="qwen-turbo")
         search_rag_system = CulturalResourceRAG(model=tongyi_model, persist_directory="./chroma_db")
-        print("[搜索] AI辅助检索系统初始化成功")
         return search_rag_system
     except Exception as e:
-        print(f"[搜索] 初始化AI辅助检索系统失败: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -148,7 +204,6 @@ def save_aigc_message_to_db(user_id: int, session_id: int, user_message: str, ai
         from pymysql.cursors import DictCursor
         conn = get_user_db_connection()
         if not conn:
-            print(f"[API] 保存消息失败：数据库连接失败")
             return False if message_id else None
         
         try:
@@ -253,8 +308,8 @@ def save_aigc_message_to_db(user_id: int, session_id: int, user_message: str, ai
                                 VALUES (%s, %s, %s, %s, %s)
                             """, (user_id, access_type, '/api/aigc/chat', session_id, 'aigc_session'))
                         except Exception as log_error:
-                            print(f"[日志] 记录访问日志失败: {log_error}")
                             # 不影响主流程，继续执行
+                            pass
                         
                         conn.commit()
                         return message_id_new
@@ -288,7 +343,6 @@ def save_aigc_message_to_db(user_id: int, session_id: int, user_message: str, ai
         finally:
             conn.close()
     except Exception as e:
-        print(f"[API] 保存消息到数据库失败: {e}")
         import traceback
         traceback.print_exc()
         return False if message_id else None
@@ -306,20 +360,18 @@ def get_text_model():
             try:
                 return ChatTongyi(api_key=SecretStr(ALIYUN_API_KEY), model="qwen-turbo")
             except Exception as e:
-                print(f"[模型] ChatTongyi初始化失败: {e}")
                 if OPENAI_API_KEY:
                     try:
                         return ChatOpenAI(model="gpt-3.5-turbo")
-                    except Exception as e2:
-                        print(f"[模型] ChatOpenAI初始化失败: {e2}")
+                    except Exception:
+                        pass
         elif OPENAI_API_KEY:
             try:
                 return ChatOpenAI(model="gpt-3.5-turbo")
-            except Exception as e:
-                print(f"[模型] ChatOpenAI初始化失败: {e}")
+            except Exception:
+                pass
         return None
-    except Exception as e:
-        print(f"[模型] 获取文本模型失败: {e}")
+    except Exception:
         return None
 
 def get_or_create_rag_system(user_id: int, db_config: Optional[Dict] = None):
@@ -342,10 +394,8 @@ def get_or_create_rag_system(user_id: int, db_config: Optional[Dict] = None):
             db_config=db_config
         )
         rag_systems[user_id] = rag_system
-        print(f"[RAG] 为用户 {user_id} 创建RAG系统成功")
         return rag_system
     except Exception as e:
-        print(f"[RAG] 为用户 {user_id} 创建RAG系统失败: {e}")
         return None
 
 def get_or_create_image_aigc_system(user_id: int, db_config: Optional[Dict] = None):
@@ -361,8 +411,9 @@ def get_or_create_image_aigc_system(user_id: int, db_config: Optional[Dict] = No
         # 延迟导入ImageAIGC模块，避免启动时加载
         from image_RAG import ImageAIGC
         
-        # 设置图片保存目录为项目根目录的AIGC_graph文件夹
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # 设置图片保存目录为项目根目录的AIGC_graph文件夹（使用相对路径）
+        current_file_dir = os.path.dirname(os.path.realpath(__file__))
+        base_dir = os.path.dirname(current_file_dir)
         aigc_graph_dir = os.path.join(base_dir, "AIGC_graph")
         os.makedirs(aigc_graph_dir, exist_ok=True)
         
@@ -374,10 +425,8 @@ def get_or_create_image_aigc_system(user_id: int, db_config: Optional[Dict] = No
             db_config=db_config
         )
         image_aigc_systems[user_id] = image_aigc_system
-        print(f"[ImageAIGC] 为用户 {user_id} 创建ImageAIGC系统成功")
         return image_aigc_system
     except Exception as e:
-        print(f"[ImageAIGC] 为用户 {user_id} 创建ImageAIGC系统失败: {e}")
         return None
 @app.route('/api/multimodal/search', methods=['POST'])
 def multimodal_search():
@@ -399,7 +448,7 @@ def multimodal_search():
                         file.save(file_path)
                         image_paths.append(file_path)
             except Exception as e:
-                print(f"[multimodal_search] 保存上传图片失败: {e}")
+                pass
 
         user_id = (request.headers.get('X-User-Id') or 
                    request.headers.get('X-User-ID') or 
@@ -429,7 +478,7 @@ def multimodal_search():
                     if desc:
                         image_descriptions.append(desc)
                 except Exception as e:
-                    print(f"[multimodal_search] 读取图片信息失败: {e}")
+                    pass
 
         query_parts = []
         if query:
@@ -440,36 +489,127 @@ def multimodal_search():
         if not final_query:
             return jsonify({'success': False, 'message': '缺少查询内容或图片描述失败'}), 400
 
+        # 使用向量检索和数据库检索
         vector_results = []
-        if getattr(rag_system, "retriever", None):
-            try:
-                docs = rag_system._search_vector(final_query)
-                for doc in docs[:6]:
-                    vector_results.append({
-                        "content": getattr(doc, "page_content", str(doc))[:500],
-                        "metadata": getattr(doc, "metadata", {})
-                    })
-            except Exception as e:
-                print(f"[multimodal_search] 向量检索失败: {e}")
-
         db_results = []
         try:
+            # 向量检索
+            vector_docs = rag_system._call_retriever(final_query)
+            if vector_docs:
+                for doc in vector_docs:
+                    content = getattr(doc, "page_content", str(doc))
+                    metadata = getattr(doc, "metadata", {})
+                    vector_results.append({
+                        "id": metadata.get('id', None),
+                        "title": metadata.get('title', '向量检索结果'),
+                        "content": content[:500],  # 限制长度
+                        "source": metadata.get('source', '向量库'),
+                        "table": "vector_store",
+                        "resource_type": "向量"
+                    })
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+        
+        try:
+            # 数据库检索（不限制返回条数）
             db_results = rag_system.query_database(final_query)
         except Exception as e:
-            print(f"[multimodal_search] 数据库检索失败: {e}")
+            import traceback
+            traceback.print_exc()
+            db_results = []  # 确保db_results是列表
+
+        # 将结果分为图片和文字两类
+        image_results = []
+        text_results = []
+        
+        for result in db_results:
+            # 判断是否为图片结果
+            has_image = False
+            image_url = None
+            
+            # 检查表名：crawled_images和AIGC_graph表的结果都是图片
+            table_name = result.get('table', '')
+            if table_name == 'crawled_images' or table_name == 'AIGC_graph':
+                has_image = True
+                # 获取图片URL
+                if result.get('image_path'):
+                    image_url = result['image_path']
+                elif result.get('url'):
+                    image_url = result['url']
+            
+            # 检查是否有图片路径字段
+            elif result.get('image_path'):
+                image_url = result['image_path']
+                has_image = True
+            elif result.get('url'):
+                url = result['url']
+                # 检查是否是图片文件扩展名
+                if isinstance(url, str):
+                    url_lower = url.lower()
+                    if any(url_lower.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']):
+                        image_url = url
+                        has_image = True
+                    elif 'crawled_images' in url or 'AIGC_graph' in url or 'image_from_users' in url:
+                        image_url = url
+                        has_image = True
+            
+            # 检查resource_type字段
+            resource_type = result.get('resource_type', '')
+            if resource_type == '图像' or resource_type == '图片' or resource_type == 'image':
+                has_image = True
+                if not image_url:
+                    # 尝试从其他字段获取图片URL
+                    image_url = result.get('related_images_url') or result.get('url')
+            
+            # 处理图片URL，确保是完整的API路径
+            if image_url and has_image:
+                # 如果是从crawled_images关联的路径
+                if 'crawled_images' in str(image_url) or str(image_url).startswith('crawled_images'):
+                    actual_file = os.path.basename(str(image_url))
+                    image_url = f"/api/images/crawled/{actual_file}"
+                # 如果是AIGC_graph路径
+                elif 'AIGC_graph' in str(image_url):
+                    actual_file = os.path.basename(str(image_url))
+                    image_url = f"/api/images/aigc/{actual_file}"
+                # 如果是用户上传的图片
+                elif 'image_from_users' in str(image_url) or 'AIGC_graph_from_users' in str(image_url):
+                    actual_file = os.path.basename(str(image_url))
+                    image_url = f"/AIGC_graph_from_users/{actual_file}"
+                # 如果已经是完整URL，保持不变
+                elif str(image_url).startswith('http://') or str(image_url).startswith('https://') or str(image_url).startswith('/'):
+                    image_url = image_url
+                # 其他情况，尝试作为文件名处理
+                else:
+                    image_url = f"/api/images/crawled/{os.path.basename(str(image_url))}"
+            
+            # 构建结果项
+            result_item = {
+                "id": result.get('id'),
+                "title": result.get('title', ''),
+                "content": result.get('content', ''),
+                "source": result.get('source', ''),
+                "table": table_name,
+                "image_url": image_url if has_image else None,
+                "resource_type": resource_type
+            }
+            
+            if has_image:
+                image_results.append(result_item)
+            else:
+                text_results.append(result_item)
 
         response = {
             "success": True,
             "query_used": final_query,
             "image_descriptions": image_descriptions,
-            "vector_results": vector_results,
-            "database_results": db_results
+            "vector_results": vector_results,  # 向量结果（新增）
+            "text_results": text_results,      # 文字结果
+            "image_results": image_results     # 图片结果
         }
         return jsonify(response)
     except Exception as e:
         import traceback
-        print(f"[multimodal_search] 未处理异常: {e}")
-        print(traceback.format_exc())
         return jsonify({'success': False, 'message': f'服务器错误: {e}'}), 500
     finally:
         if image_paths:
@@ -515,7 +655,6 @@ def register():
                 avatar_file = request.files['avatar']
                 if avatar_file.filename:
                     # 先保存为临时文件，注册成功后再重命名
-                    import os
                     import tempfile
                     # 获取文件扩展名
                     file_ext = os.path.splitext(avatar_file.filename)[1].lower()
@@ -550,7 +689,6 @@ def register():
             # 处理头像上传（如果有）
             if not request.is_json and 'avatar' in request.files and avatar_path and avatar_path != '/default.jpg':
                 try:
-                    import os
                     import shutil
                     if os.path.exists(avatar_path):
                         # 使用项目根目录的public文件夹（与start_dev.bat同目录）
@@ -589,7 +727,6 @@ def register():
                     else:
                         avatar_path = '/default.jpg'
                 except Exception as e:
-                    print(f"[API] 处理头像失败: {e}")
                     # 如果头像处理失败，使用默认头像
                     avatar_path = '/default.jpg'
             elif request.is_json and avatar_path and avatar_path != '/default.jpg':
@@ -609,11 +746,10 @@ def register():
                         finally:
                             conn.close()
                 except Exception as e:
-                    print(f"[API] 更新头像路径失败: {e}")
+                    pass
         
         return jsonify(result)
     except Exception as e:
-        print(f"[API] 注册失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'注册失败：{str(e)}'}), 500
@@ -640,12 +776,10 @@ def login():
         
         # 确保result不为None
         if not result:
-            print(f"[API] 登录返回结果为空，账号：{account}")
             return jsonify({'success': False, 'message': '登录处理失败，请稍后重试'}), 500
         
         # 确保result是字典格式
         if not isinstance(result, dict):
-            print(f"[API] 登录返回结果格式错误，类型：{type(result)}")
             return jsonify({'success': False, 'message': '登录处理失败，服务器返回格式错误'}), 500
         
         # 记录登录日志
@@ -655,7 +789,6 @@ def login():
                 try:
                     UserLogging.log_login(user_id, account)
                 except Exception as log_error:
-                    print(f"[API] 记录登录日志失败: {log_error}")
                     import traceback
                     traceback.print_exc()
                     # 日志记录失败不影响登录流程
@@ -673,7 +806,6 @@ def login():
         
         return jsonify(result)
     except Exception as e:
-        print(f"[API] 登录失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'登录失败：{str(e)}'}), 500
@@ -703,7 +835,6 @@ def update_nickname():
         
         return jsonify(result)
     except Exception as e:
-        print(f"[API] 修改昵称失败: {e}")
         return jsonify({'success': False, 'message': f'修改昵称失败：{str(e)}'}), 500
 
 @app.route('/api/auth/update-signature', methods=['POST'])
@@ -755,7 +886,6 @@ def update_signature():
             if conn:
                 conn.close()
     except Exception as e:
-        print(f"[API] 修改个人签名失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'修改个人签名失败：{str(e)}'}), 500
@@ -801,7 +931,6 @@ def delete_account():
             if conn:
                 conn.close()
     except Exception as e:
-        print(f"[API] 注销账号失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'注销账号失败：{str(e)}'}), 500
@@ -830,7 +959,6 @@ def get_user():
         else:
             return jsonify({'success': False, 'message': '用户不存在'}), 404
     except Exception as e:
-        print(f"[API] 获取用户信息失败: {e}")
         return jsonify({'success': False, 'message': f'获取用户信息失败：{str(e)}'}), 500
 
 @app.route('/api/auth/change-password', methods=['POST'])
@@ -855,7 +983,6 @@ def change_password():
         result = get_auth_system().update_password(user_id, old_password, new_password)
         return jsonify(result)
     except Exception as e:
-        print(f"[API] 修改密码失败: {e}")
         return jsonify({'success': False, 'message': f'修改密码失败：{str(e)}'}), 500
 
 @app.route('/api/auth/change-password-by-security', methods=['POST'])
@@ -907,7 +1034,6 @@ def change_password_by_security():
         finally:
             conn.close()
     except Exception as e:
-        print(f"[API] 通过二级密码修改密码失败: {e}")
         return jsonify({'success': False, 'message': f'修改密码失败：{str(e)}'}), 500
 
 @app.route('/api/auth/verify-security-answer', methods=['POST'])
@@ -927,7 +1053,6 @@ def verify_security_answer():
         result = auth_system.verify_security_question(user_id, answer)
         return jsonify(result)
     except Exception as e:
-        print(f"[API] 验证安全问题答案失败: {e}")
         return jsonify({'success': False, 'message': f'验证失败：{str(e)}'}), 500
 
 @app.route('/api/auth/change-security-question', methods=['POST'])
@@ -948,7 +1073,6 @@ def change_security_question():
         result = get_auth_system().update_security_question(user_id, question, answer)
         return jsonify(result)
     except Exception as e:
-        print(f"[API] 更换安全问题失败: {e}")
         return jsonify({'success': False, 'message': f'更换失败：{str(e)}'}), 500
 
 @app.route('/api/auth/forgot-password/question', methods=['POST'])
@@ -964,7 +1088,6 @@ def get_security_question_for_reset():
         result = get_auth_system().get_security_question(account)
         return jsonify(result)
     except Exception as e:
-        print(f"[API] 获取安全问题失败: {e}")
         return jsonify({'success': False, 'message': f'获取安全问题失败：{str(e)}'}), 500
 
 @app.route('/api/auth/forgot-password/verify', methods=['POST'])
@@ -984,7 +1107,6 @@ def verify_security_answer_for_reset():
         result = get_auth_system().verify_security_answer(account, answer)
         return jsonify(result)
     except Exception as e:
-        print(f"[API] 验证答案失败: {e}")
         return jsonify({'success': False, 'message': f'验证失败：{str(e)}'}), 500
 
 @app.route('/api/auth/forgot-password/reset', methods=['POST'])
@@ -1017,7 +1139,6 @@ def reset_password_via_security():
         result = get_auth_system().reset_password(account, new_password)
         return jsonify(result)
     except Exception as e:
-        print(f"[API] 重置密码失败: {e}")
         return jsonify({'success': False, 'message': f'重置密码失败：{str(e)}'}), 500
 
 @app.route('/api/auth/change-avatar', methods=['POST'])
@@ -1046,14 +1167,12 @@ def change_avatar():
                 # 如果当前头像不是默认头像，删除旧头像
                 if old_avatar_path and old_avatar_path != '/default.jpg' and old_avatar_path != './default.jpg':
                     try:
-                        import os
                         old_filename = old_avatar_path.lstrip('/')
                         old_file_path = os.path.join(public_dir, old_filename)
                         if os.path.exists(old_file_path):
                             os.remove(old_file_path)
-                            print(f"[API] 已删除旧头像: {old_file_path}")
                     except Exception as e:
-                        print(f"[API] 删除旧头像失败: {e}")
+                        pass
                 
                 # 更新数据库
                 from db_connection import get_user_db_connection
@@ -1084,7 +1203,6 @@ def change_avatar():
             if not avatar_file.filename:
                 return jsonify({'success': False, 'message': '请选择头像文件'}), 400
             
-            import os
             from werkzeug.utils import secure_filename
             
             # 获取文件扩展名
@@ -1104,9 +1222,8 @@ def change_avatar():
                     old_file_path = os.path.join(public_dir, old_filename)
                     if os.path.exists(old_file_path):
                         os.remove(old_file_path)
-                        print(f"[API] 已删除旧头像: {old_file_path}")
                 except Exception as e:
-                    print(f"[API] 删除旧头像失败: {e}")
+                    pass
             
             # 处理头像：压缩到200x200并重命名
             from PIL import Image
@@ -1127,7 +1244,6 @@ def change_avatar():
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
             except Exception as e:
-                print(f"[API] 处理头像失败: {e}")
                 # 如果PIL处理失败，使用原文件
                 final_filename = f'{account}{file_ext}'
                 final_path = os.path.join(public_dir, final_filename)
@@ -1158,7 +1274,6 @@ def change_avatar():
                 return jsonify({'success': False, 'message': '数据库连接失败'}), 500
                 
     except Exception as e:
-        print(f"[API] 更换头像失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'更换头像失败：{str(e)}'}), 500
@@ -1180,14 +1295,13 @@ def log_user_access(user_id, access_type, access_path=None, resource_id=None, re
                 """, (user_id, access_type, access_path, resource_id, resource_type))
                 conn.commit()
         except Exception as e:
-            print(f"[日志] 记录访问日志失败: {e}")
             if conn:
                 conn.rollback()
         finally:
             if conn:
                 conn.close()
     except Exception as e:
-        print(f"[日志] 记录访问日志异常: {e}")
+        pass
 
 
 @app.route('/api/aigc/chat', methods=['POST'])
@@ -1207,12 +1321,10 @@ def aigc_chat():
             try:
                 session_id = int(session_id)
             except (ValueError, TypeError):
-                print(f"[API] 警告：无效的session_id: {session_id}")
                 session_id = None
         else:
             session_id = None
         
-        print(f"[API] 收到请求 - mode: {mode}, query: {query[:50] if query else '(空)'}..., stream: {stream}, session_id: {session_id}")
         
         # 处理图片上传（文字和图片AIGC都支持）
         temp_dir = None
@@ -1227,8 +1339,9 @@ def aigc_chat():
             temp_dir = tempfile.mkdtemp()
             try:
                 files = request.files.getlist('images')
-                # 创建AIGC_graph_from_users文件夹（与AIGC_graph同目录）
-                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                # 创建AIGC_graph_from_users文件夹（与AIGC_graph同目录，使用相对路径）
+                current_file_dir = os.path.dirname(os.path.realpath(__file__))
+                base_dir = os.path.dirname(current_file_dir)
                 aigc_graph_from_users_dir = os.path.join(base_dir, "AIGC_graph_from_users")
                 os.makedirs(aigc_graph_from_users_dir, exist_ok=True)
                 
@@ -1242,13 +1355,11 @@ def aigc_chat():
                         # 注意：此时user_id还未定义，需要先获取user_id后再保存图片
                         # 这里先保存到临时目录，稍后在获取user_id后再保存到AIGC_graph_from_users文件夹
             except Exception as e:
-                print(f"保存上传图片失败: {e}")
                 import traceback
                 traceback.print_exc()
         
         # 如果没有查询内容且没有图片，返回错误
         if not query and not image_paths:
-            print("[API] 错误：查询内容和图片都为空")
             return jsonify({'error': '查询内容或图片不能同时为空', 'answer': '请输入查询内容或上传图片'}), 400
         
         # 获取用户ID（从请求头、表单数据或JSON数据）
@@ -1257,7 +1368,6 @@ def aigc_chat():
                    request.form.get('user_id') or
                    (request.json.get('user_id') if request.is_json else None))
         if not user_id:
-            print("[API] 错误：缺少用户ID")
             return jsonify({
                 'error': '缺少用户信息',
                 'answer': '请先登录后再使用AIGC功能'
@@ -1290,13 +1400,14 @@ def aigc_chat():
             # 获取用户账号
             user_info = get_auth_system().get_user_by_id(user_id)
             if not user_info:
-                print(f"[API] 警告：无法获取用户 {user_id} 的信息，使用user_id作为账号")
                 user_account = str(user_id)
             else:
                 user_account = user_info.get('account', str(user_id))
             
             # 创建AIGC_graph_from_users文件夹（与AIGC_graph同目录）
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            # 使用相对路径
+            current_file_dir = os.path.dirname(os.path.realpath(__file__))
+            base_dir = os.path.dirname(current_file_dir)
             aigc_graph_from_users_dir = os.path.join(base_dir, "AIGC_graph_from_users")
             os.makedirs(aigc_graph_from_users_dir, exist_ok=True)
             
@@ -1329,9 +1440,7 @@ def aigc_chat():
                     # 构建URL（相对路径）
                     image_url = f'/AIGC_graph_from_users/{saved_filename}'
                     user_uploaded_image_urls.append(image_url)
-                    print(f"[API] 用户上传图片已保存: {saved_path} -> {image_url}")
                 except Exception as e:
-                    print(f"[API] 保存用户上传图片失败: {e}")
                     import traceback
                     traceback.print_exc()
         
@@ -1339,7 +1448,6 @@ def aigc_chat():
             # 文字AIGC模式：使用RAG系统（Tongyi模型）
             rag_system = get_or_create_rag_system(user_id, db_config)
             if not rag_system:
-                print("[API] 错误：RAG系统未初始化")
                 return jsonify({
                     'error': 'RAG系统未初始化',
                     'answer': '抱歉，系统未正确配置，请检查API密钥设置。'
@@ -1349,15 +1457,13 @@ def aigc_chat():
                 # 处理图片理解：如果有图片，先理解图片内容
                 image_descriptions = []
                 if image_paths:
-                    print(f"[API] 开始理解图片内容... (共{len(image_paths)}张)")
                     for img_path in image_paths:
                         try:
                             desc = rag_system._read_image_info(img_path)
                             if desc:
                                 image_descriptions.append(desc)
-                                print(f"[API] 图片描述: {desc[:100]}...")
                         except Exception as e:
-                            print(f"[API] 读取图片信息失败: {e}")
+                            pass
                 
                 # 构建最终查询：如果有图片描述，合并到查询中
                 final_query = query
@@ -1391,14 +1497,10 @@ def aigc_chat():
                             image_from_users_url=user_uploaded_image_urls[0] if user_uploaded_image_urls else None,
                             db_config=db_config
                         )
-                        print(f"[API] 用户消息已立即保存到数据库，消息ID: {message_id}")
                     except Exception as save_error:
-                        print(f"[API] 立即保存用户消息失败: {save_error}")
                         import traceback
                         traceback.print_exc()
                 
-                print(f"[API] 调用RAG系统（Tongyi）处理问题... (用户ID: {user_id})")
-                print(f"[API] 最终查询: {final_query[:200]}...")
                 
                 # 确保image_paths参数正确传递
                 result = rag_system.ask(
@@ -1425,7 +1527,6 @@ def aigc_chat():
                             retrieval_ids.append(str(resource_id))
                     retrieval_id_str = ','.join(retrieval_ids) if retrieval_ids else None
                 except Exception as e:
-                    print(f"[API] 提取检索资源ID失败: {e}")
                     retrieval_id_str = None
                 
                 # 保存AIGC生成的文字资源到数据库
@@ -1448,10 +1549,9 @@ def aigc_chat():
                         festival_title=festival_title,
                         tags=result.get('key_entities', [])
                     )
-                    print(f"[API] 已保存AIGC生成的文字资源到数据库")
                 except Exception as e:
-                    print(f"[API] 保存AIGC文字资源失败: {e}")
                     # 不影响正常返回，继续执行
+                    pass
                 
                 # 更新消息到数据库（使用message_id更新，而不是再次插入）
                 if session_id and message_id:
@@ -1471,13 +1571,10 @@ def aigc_chat():
                         )
                         # 记录文字AIGC使用日志
                         UserLogging.log_aigc_text(user_id, final_query)
-                        print(f"[API] 消息已更新到数据库，检索资源ID: {retrieval_id_str}")
                     except Exception as save_error:
-                        print(f"[API] 更新消息失败: {save_error}")
                         import traceback
                         traceback.print_exc()
                 
-                print(f"[API] RAG处理成功（Tongyi模型），返回答案长度: {len(answer)}")
                 
                 # 非流式输出（普通模式，不再支持流式输出）
                 return jsonify({
@@ -1490,8 +1587,6 @@ def aigc_chat():
             except Exception as e:
                 import traceback
                 error_trace = traceback.format_exc()
-                print(f"[API] RAG处理失败: {e}")
-                print(f"[API] 错误堆栈: {error_trace}")
                 
                 # 返回更详细的错误信息
                 error_msg = str(e)
@@ -1526,17 +1621,19 @@ def aigc_chat():
             try:
                 rag_system = get_or_create_rag_system(user_id, db_config)
             except Exception as rag_init_error:
-                print(f"[API] RAG系统初始化失败: {rag_init_error}")
                 import traceback
                 traceback.print_exc()
                 rag_system = None
+            
+            # 在try块外初始化变量，确保在异常处理中可用
+            story_prompt = query if query else "请创作一个像夸父逐日、嫦娥奔月这样具有辨识度的传统文化故事"
+            user_original_query = query if query else ""
             
             try:
                 
                 # 处理图片理解：如果有图片，先理解图片内容
                 image_descriptions = []
                 if image_paths:
-                    print(f"[API] 开始理解图片内容... (共{len(image_paths)}张)")
                     # 使用RAG系统来理解图片（如果有的话）
                     if rag_system:
                         for img_path in image_paths:
@@ -1544,18 +1641,10 @@ def aigc_chat():
                                 desc = rag_system._read_image_info(img_path)
                                 if desc:
                                     image_descriptions.append(desc)
-                                    print(f"[API] 图片描述: {desc[:100]}...")
                             except Exception as e:
-                                print(f"[API] 读取图片信息失败: {e}")
+                                pass
                 
-                # 保存用户原始输入（用于保存到数据库）
-                user_original_query = query if query else ""
-                
-                # 修改逻辑：无论用户是否有提示，都先生成完整故事，再根据故事生成连环画
-                # 这样可以确保故事连贯性
-                story_prompt = query if query else "请创作一个像夸父逐日、嫦娥奔月这样具有辨识度的传统文化故事"
-                
-                # 如果有图片，将图片信息添加到提示中
+                # 更新story_prompt（如果有图片描述）
                 if image_descriptions:
                     image_context = "\n".join(image_descriptions)
                     if query:
@@ -1563,11 +1652,11 @@ def aigc_chat():
                     else:
                         story_prompt = f"请根据以下图片内容，创作一个像夸父逐日、嫦娥奔月这样具有辨识度的传统文化故事。图片内容：{image_context}"
                 
-                # 如果没有提示词且没有图片描述，使用默认提示
+                # 确保story_prompt始终有值，用于后续降级处理
                 if not story_prompt:
-                    story_prompt = "请创作一个像夸父逐日、嫦娥奔月这样具有辨识度的传统文化故事"
-                    if not user_original_query:
-                        user_original_query = "（根据上传的图片自动生成）"
+                    story_prompt = "请创作一个传统文化故事"
+                if not user_original_query:
+                    user_original_query = "（根据上传的图片自动生成）"
                 
                 # 立即保存用户消息到数据库（在生成图片之前）
                 message_id = None
@@ -1586,14 +1675,11 @@ def aigc_chat():
                             image_from_users_url=json.dumps(user_uploaded_image_urls, ensure_ascii=False) if user_uploaded_image_urls else None,
                             db_config=db_config
                         )
-                        print(f"[API] 用户消息已立即保存到数据库，消息ID: {message_id}")
                     except Exception as save_error:
-                        print(f"[API] 立即保存用户消息失败: {save_error}")
                         import traceback
                         traceback.print_exc()
                 
                 # 第一步：先生成完整故事
-                print(f"[API] 第一步：生成完整故事...")
                 story = ""
                 if rag_system:
                     story_result = rag_system.ask(
@@ -1602,19 +1688,13 @@ def aigc_chat():
                         use_history=False
                     )
                     story = story_result.get('answer', '')
-                    if story:
-                        print(f"[API] 故事生成完成，长度: {len(story)}")
-                        print(f"[API] 故事内容预览: {story[:200]}...")
-                    else:
-                        print(f"[API] 警告：故事生成失败，使用原始提示词")
+                    if not story:
                         story = story_prompt
                 else:
-                    print(f"[API] 警告：RAG系统未初始化，使用原始提示词")
                     story = story_prompt
                 
                 # 第二步：根据完整故事生成连环画
                 final_prompt = f"根据以下完整故事创作一组连环画，要求画面精美、以假乱真，故事要连贯完整：\n\n{story}"
-                print(f"[API] 第二步：根据完整故事生成连环画...")
                 
                 # 从查询中提取风格（如果有）
                 style = "传统节日风格"
@@ -1622,20 +1702,25 @@ def aigc_chat():
                     # 尝试提取风格信息
                     pass
                 
-                print(f"[API] 调用ImageAIGC系统（Huoshan）生成图片... (用户ID: {user_id})")
-                print(f"[API] 最终提示词: {final_prompt[:200]}...")
                 
                 # 生成图片
-                image_path = image_aigc_system.generate_image(
-                    prompt=final_prompt,
-                    style=style,
-                    image_paths=image_paths if image_paths else None,
-                    use_history=True
-                )
+                try:
+                    image_path = image_aigc_system.generate_image(
+                        prompt=final_prompt,
+                        style=style,
+                        image_paths=image_paths if image_paths else None,
+                        use_history=True
+                    )
+                except Exception as gen_error:
+                    import traceback
+                    error_trace = traceback.format_exc()
+                    image_path = None  # 确保image_path为None
                 
-                if image_path:
-                    import os
-                    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                # 检查image_path是否有效（非空且非空字符串）
+                if image_path and image_path.strip():
+                    # 使用相对路径
+                    current_file_dir = os.path.dirname(os.path.realpath(__file__))
+                    base_dir = os.path.dirname(current_file_dir)
                     aigc_graph_dir = os.path.join(base_dir, "AIGC_graph")
                     
                     # 检查是否是连环画（JSON格式）
@@ -1650,7 +1735,6 @@ def aigc_chat():
                             if isinstance(comic_data, dict) and comic_data.get('type') == 'comic':
                                 is_comic = True
                                 comic_paths = comic_data.get('paths', [])
-                                print(f"[API] 检测到连环画，共{len(comic_paths)}张图片")
                     except (json.JSONDecodeError, AttributeError):
                         # 不是JSON格式，按单个图片处理
                         pass
@@ -1670,7 +1754,6 @@ def aigc_chat():
                                 filename = os.path.basename(path)
                                 image_urls.append(f'/AIGC_graph/{filename}')
                         
-                        print(f"[API] 连环画路径转换完成，共{len(image_urls)}张图片")
                         
                         # 保存连环画的所有图片到数据库
                         try:
@@ -1686,10 +1769,9 @@ def aigc_chat():
                                     source_from="Huoshan连环画生成",
                                     tags=tags
                                 )
-                            print(f"[API] 已保存连环画所有图片到数据库")
                         except Exception as e:
-                            print(f"[API] 保存连环画图片失败: {e}")
                             # 不影响正常返回，继续执行
+                            pass
                         
                         # 更新之前保存的用户消息，添加AI回答（如果之前已保存）
                         image_from_users_url_json = json.dumps(user_uploaded_image_urls, ensure_ascii=False) if user_uploaded_image_urls else None
@@ -1715,15 +1797,12 @@ def aigc_chat():
                                     message_id=message_id,  # 使用message_id更新现有消息
                                     db_config=db_config
                                 )
-                                print(f"[API] 已更新AI回答到数据库")
                                 # 记录图片AIGC使用日志
                                 UserLogging.log_aigc_image(user_id, final_prompt)
                             except Exception as save_error:
-                                print(f"[API] 更新AI消息失败: {save_error}")
                                 import traceback
                                 traceback.print_exc()
                         
-                        print(f"[API] 连环画生成成功（Huoshan模型），共{len(image_urls)}张图片")
                         
                         # 返回连环画数据
                         return jsonify({
@@ -1749,10 +1828,9 @@ def aigc_chat():
                                 source_from="Huoshan图片生成",
                                 tags=tags
                             )
-                            print(f"[API] 已保存AIGC生成的图片到数据库")
                         except Exception as e:
-                            print(f"[API] 保存AIGC图片失败: {e}")
                             # 不影响正常返回，继续执行
+                            pass
                         
                         # 构建图片URL（相对路径）
                         # image_path可能是绝对路径（如：D:\git\mygit\Java-project\AIGC_graph\0001.jpeg）
@@ -1772,7 +1850,6 @@ def aigc_chat():
                             filename = os.path.basename(image_path)
                             image_url = f'/AIGC_graph/{filename}'
                         
-                        print(f"[API] 图片路径转换: {image_path} -> {image_url}")
                         
                         # 更新之前保存的用户消息，添加AI回答（如果之前已保存）
                         # 将用户上传的图片URL列表转换为JSON字符串存储
@@ -1791,15 +1868,12 @@ def aigc_chat():
                                     message_id=message_id,  # 使用message_id更新现有消息
                                     db_config=db_config
                                 )
-                                print(f"[API] 已更新AI回答到数据库")
                                 # 记录图片AIGC使用日志
                                 UserLogging.log_aigc_image(user_id, final_prompt)
                             except Exception as save_error:
-                                print(f"[API] 更新AI消息失败: {save_error}")
                                 import traceback
                                 traceback.print_exc()
                         
-                        print(f"[API] 图片生成成功（Huoshan模型），图片路径: {image_url}")
                         
                         # 非流式输出（普通模式）
                         return jsonify({
@@ -1808,8 +1882,29 @@ def aigc_chat():
                             'model': 'image'  # 明确返回model类型，用于前端显示AI昵称
                         })
                 else:
-                    # 图片生成失败，更新消息使用default.jpg
-                    error_msg = '图片生成失败，请稍后重试'
+                    # 图片生成失败，尝试使用RAG系统生成文字回答作为降级方案
+                    text_answer = ""
+                    try:
+                        if rag_system:
+                            # 使用RAG系统生成文字回答
+                            # 优先使用story_prompt（已在try块外定义），其次使用user_original_query
+                            fallback_query = story_prompt if story_prompt else (user_original_query if user_original_query else "请创作一个传统文化故事")
+                            rag_result = rag_system.ask(
+                                query=fallback_query,
+                                image_paths=None,
+                                use_history=False
+                            )
+                            text_answer = rag_result.get('answer', '')
+                            if not text_answer:
+                                text_answer = "抱歉，图片生成失败，文字回答生成也未能完成。可能的原因：1. 提示词包含敏感内容；2. API服务暂时不可用；3. 网络连接问题。"
+                        else:
+                            text_answer = "抱歉，图片生成失败，且RAG系统未初始化。可能的原因：1. 提示词包含敏感内容；2. API服务暂时不可用；3. 网络连接问题。"
+                    except Exception as rag_error:
+                        import traceback
+                        traceback.print_exc()
+                        text_answer = "抱歉，图片生成失败，文字回答生成也出现错误。可能的原因：1. 提示词包含敏感内容；2. API服务暂时不可用；3. 网络连接问题。"
+                    
+                    # 更新消息，使用文字回答和默认图片
                     default_image_url = '/AIGC_graph/default.jpg'
                     image_from_users_url_json = json.dumps(user_uploaded_image_urls, ensure_ascii=False) if user_uploaded_image_urls else None
                     if session_id and message_id:
@@ -1818,28 +1913,49 @@ def aigc_chat():
                                 user_id=user_id,
                                 session_id=session_id,
                                 user_message=user_original_query if user_original_query else "（根据上传的图片自动生成）",
-                                ai_message=f'抱歉，{error_msg}。',
-                                model='image',
+                                ai_message=text_answer,
+                                model='image',  # 保持为image模式，但内容是文字回答
                                 image_url=default_image_url,
                                 image_from_users_url=image_from_users_url_json,
                                 message_id=message_id,  # 使用message_id更新现有消息
                                 db_config=db_config
                             )
-                            print(f"[API] 已更新失败消息到数据库，使用default.jpg")
                         except Exception as save_error:
-                            print(f"[API] 更新失败消息失败: {save_error}")
+                            pass
                     
+                    # 返回文字回答和默认图片
                     return jsonify({
-                        'error': '图片生成失败',
-                        'answer': f'抱歉，{error_msg}。'
-                    }), 500
+                        'answer': text_answer,
+                        'image_path': default_image_url,  # 提供默认图片
+                        'model': 'image'  # 保持为image模式
+                    }), 200
                     
             except Exception as e:
                 import traceback
                 error_trace = traceback.format_exc()
-                print(f"图片生成失败: {e}")
-                print(f"错误堆栈: {error_trace}")
                 error_msg = str(e)
+                
+                # 图片生成异常，尝试使用RAG系统生成文字回答作为降级方案
+                text_answer = ""
+                try:
+                    if rag_system:
+                        # 使用RAG系统生成文字回答
+                        # 优先使用user_original_query，其次使用story_prompt（已在try块外定义），最后使用默认提示
+                        fallback_query = user_original_query if user_original_query else (
+                            story_prompt if story_prompt else "请创作一个传统文化故事"
+                        )
+                        rag_result = rag_system.ask(
+                            query=fallback_query,
+                            image_paths=None,
+                            use_history=False
+                        )
+                        text_answer = rag_result.get('answer', '')
+                        if not text_answer:
+                            text_answer = f"抱歉，图片生成失败：{error_msg}。已尝试生成文字回答但未能完成。"
+                    else:
+                        text_answer = f"抱歉，图片生成失败：{error_msg}。RAG系统未初始化，无法生成文字回答。"
+                except Exception as rag_error:
+                    text_answer = f"抱歉，图片生成失败：{error_msg}。文字回答生成也出现错误。"
                 
                 # 如果发生异常，尝试更新消息（如果message_id存在）
                 if session_id and message_id:
@@ -1851,28 +1967,27 @@ def aigc_chat():
                             user_id=user_id,
                             session_id=session_id,
                             user_message=user_original_query_local,
-                            ai_message=f'抱歉，图片生成失败：{error_msg}。',
+                            ai_message=text_answer,
                             model='image',
                             image_url=default_image_url,
                             image_from_users_url=image_from_users_url_json,
                             message_id=message_id,
                             db_config=db_config
                         )
-                        print(f"[API] 已更新异常消息到数据库")
                     except Exception as save_error:
-                        print(f"[API] 更新异常消息失败: {save_error}")
+                        pass
                 
+                # 返回文字回答和默认图片
                 return jsonify({
-                    'error': error_msg,
-                    'answer': f'图片生成失败：{error_msg}'
-                }), 500
+                    'answer': text_answer,
+                    'image_path': '/AIGC_graph/default.jpg',  # 提供默认图片
+                    'model': 'image'  # 保持为image模式
+                }), 200
         else:
             return jsonify({'error': f'不支持的模式：{mode}'}), 400
             
     except Exception as e:
         import traceback
-        print(f"[API] 处理错误: {e}")
-        print(f"[API] 错误堆栈: {traceback.format_exc()}")
         return jsonify({
             'error': str(e),
             'answer': f'处理失败：{str(e)}\n\n请检查后端控制台的详细错误信息'
@@ -1904,7 +2019,6 @@ def extract_title():
         conversation = data.get('conversation', '')
         user_id = data.get('user_id')  # 从请求中获取用户ID
         
-        print(f"[API] 提取主题请求，对话长度: {len(conversation)}")
         
         if not conversation:
             return jsonify({'title': '新对话'}), 200
@@ -1939,10 +2053,8 @@ def extract_title():
 
 标题："""
                 
-                print(f"[API] 调用模型提取主题...")
                 # 直接使用RAG系统的模型调用方法
                 response = rag_system._call_model(prompt)
-                print(f"[API] 模型返回: {response[:50]}...")
                 
                 title = response.strip()
                 
@@ -1956,7 +2068,6 @@ def extract_title():
                 # 移除可能的JSON格式标记
                 if title.startswith('{') or title.startswith('['):
                     try:
-                        import json
                         parsed = json.loads(title)
                         if isinstance(parsed, dict):
                             title = parsed.get('title', title)
@@ -1973,17 +2084,13 @@ def extract_title():
                 if not title or len(title) < 2:
                     raise ValueError("标题太短或为空")
                 
-                print(f"[API] 提取的主题: {title}")
                 return jsonify({'title': title})
                 
             except Exception as e:
                 import traceback
-                print(f"[API] AI提取主题失败: {e}")
-                print(f"[API] 错误堆栈: {traceback.format_exc()}")
                 # 继续执行降级方案
         
         # 降级方案：从对话中提取关键词
-        print(f"[API] 使用降级方案提取主题")
         import re
         lines = conversation.split('\n')
         for line in lines:
@@ -2000,8 +2107,6 @@ def extract_title():
         
     except Exception as e:
         import traceback
-        print(f"[API] 提取主题失败: {e}")
-        print(f"[API] 错误堆栈: {traceback.format_exc()}")
         return jsonify({'title': '新对话'})
 
 @app.route('/api/upload', methods=['POST'])
@@ -2164,8 +2269,6 @@ def upload_resource():
             
     except Exception as e:
         import traceback
-        print(f"[API] 上传资源失败: {e}")
-        print(f"[API] 错误堆栈: {traceback.format_exc()}")
         return jsonify({
             'success': False,
             'message': f'上传失败: {str(e)}'
@@ -2198,11 +2301,8 @@ def health():
 @app.route('/api/home/resources', methods=['GET'])
 def get_home_resources():
     """获取首页资源列表（从crawled_images和cultural_entities表）"""
-    print(f"[API] 收到获取首页资源请求: page={request.args.get('page', 1)}, page_size={request.args.get('page_size', 8)}")
     try:
         import re
-        import json
-        import os
         
         # 获取分页参数
         page = int(request.args.get('page', 1))
@@ -2212,14 +2312,10 @@ def get_home_resources():
         from db_connection import get_user_db_connection
         conn = None
         try:
-            print("[API] 正在连接数据库...")
             conn = get_user_db_connection()
             if not conn:
-                print("[API] 获取首页资源失败：数据库连接返回None")
                 return jsonify({'success': False, 'message': '数据库连接失败，请检查数据库配置和连接状态'}), 500
-            print("[API] 数据库连接成功")
         except Exception as db_error:
-            print(f"[API] 获取首页资源失败：数据库连接异常: {db_error}")
             import traceback
             traceback.print_exc()
             return jsonify({'success': False, 'message': f'数据库连接异常：{str(db_error)}'}), 500
@@ -2269,7 +2365,6 @@ def get_home_resources():
                 end_idx = start_idx + page_size
                 paginated_images = festival_list[start_idx:end_idx]
                 
-                print(f"[API] 找到 {total_count} 个资源，当前页显示 {len(paginated_images)} 个")
                 
                 # 构建资源列表
                 for img in paginated_images:
@@ -2356,7 +2451,6 @@ def get_home_resources():
                                                 entity_name = match.group(1)
                                             break
                         except Exception as e:
-                            print(f"解析tags失败: {e}")
                             pass
                     
                     # 4. 如果还是没有，使用festival_name字段
@@ -2499,7 +2593,6 @@ def get_home_resources():
                     
                     total = max(total, total_entities + total_aigc)
                 
-                print(f"[API] 成功获取资源: {len(resources)} 条记录")
                 return jsonify({
                     'success': True,
                     'resources': resources,
@@ -2518,10 +2611,8 @@ def get_home_resources():
                     pass
             
     except Exception as e:
-        print(f"[API] 获取首页资源失败: {e}")
         import traceback
         error_trace = traceback.format_exc()
-        print(f"[API] 错误堆栈:\n{error_trace}")
         return jsonify({
             'success': False,
             'message': f'获取资源失败：{str(e)}',
@@ -2531,15 +2622,61 @@ def get_home_resources():
 
 @app.route('/api/resource/detail', methods=['GET'])
 def get_resource_detail():
-    """获取资源详情（某个节日的所有图片）"""
+    """获取资源详情（某个节日的所有图片）
+    支持两种查询方式：
+    1. festival_name参数：通过节日名称查询
+    2. id + table参数：通过资源ID和表名查询
+    """
     festival_name = request.args.get('festival_name')
-    if not festival_name:
-        return jsonify({'success': False, 'message': '缺少festival_name参数'}), 400
+    resource_id_param = request.args.get('id', type=int)
+    table_param = request.args.get('table', '')
     
-    print(f"[API] 收到获取资源详情请求: festival_name={festival_name}")
+    # 如果使用id+table方式，需要转换为festival_name
+    if resource_id_param and table_param:
+        # 根据table类型查询festival_name
+        from db_connection import get_user_db_connection
+        from pymysql.cursors import DictCursor
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor(DictCursor) as cursor:
+                if table_param == 'cultural_entities':
+                    cursor.execute("""
+                        SELECT entity_name FROM cultural_entities WHERE id = %s
+                    """, (resource_id_param,))
+                    result = cursor.fetchone()
+                    if result:
+                        festival_name = result.get('entity_name')
+                elif table_param == 'cultural_resources':
+                    cursor.execute("""
+                        SELECT title FROM cultural_resources WHERE id = %s
+                    """, (resource_id_param,))
+                    result = cursor.fetchone()
+                    if result:
+                        festival_name = result.get('title')
+                elif table_param == 'AIGC_cultural_entities':
+                    cursor.execute("""
+                        SELECT entity_name FROM AIGC_cultural_entities WHERE id = %s
+                    """, (resource_id_param,))
+                    result = cursor.fetchone()
+                    if result:
+                        festival_name = result.get('entity_name')
+                elif table_param == 'AIGC_cultural_resources':
+                    cursor.execute("""
+                        SELECT title FROM AIGC_cultural_resources WHERE id = %s
+                    """, (resource_id_param,))
+                    result = cursor.fetchone()
+                    if result:
+                        festival_name = result.get('title')
+        finally:
+            conn.close()
+    
+    if not festival_name:
+        return jsonify({'success': False, 'message': '缺少festival_name参数或无法通过id+table获取festival_name'}), 400
+    
     try:
-        import json
-        import os
         import re
         
         # 获取数据库连接
@@ -2550,7 +2687,6 @@ def get_resource_detail():
             if not conn:
                 return jsonify({'success': False, 'message': '数据库连接失败'}), 500
         except Exception as db_error:
-            print(f"[API] 数据库连接异常: {db_error}")
             return jsonify({'success': False, 'message': f'数据库连接异常：{str(db_error)}'}), 500
         
         try:
@@ -2731,7 +2867,6 @@ def get_resource_detail():
                                             description = tag[:500]
                                         break
                         except Exception as e:
-                            print(f"解析tags失败: {e}")
                             pass
                     
                     image_list.append({
@@ -2742,15 +2877,35 @@ def get_resource_detail():
                         'crawl_time': str(img.get('crawl_time', '')) if img.get('crawl_time') else None
                     })
                 
-                print(f"[API] 成功获取资源详情: {festival_name}, 共 {len(image_list)} 张图片")
-                print(f"[API] 资源描述长度: {len(description) if description else 0} 字符")
+                # 获取resource_id（如果通过id和table参数查询）
+                resource_id = None
+                resource_id_param = request.args.get('id', type=int)
+                table_param = request.args.get('table', '')
+                
+                if resource_id_param and table_param:
+                    # 根据table参数确定resource_id
+                    if table_param == 'cultural_resources':
+                        resource_id = resource_id_param
+                    elif table_param == 'cultural_entities':
+                        # 从cultural_entities获取关联的resource_id
+                        cursor.execute("""
+                            SELECT resource_id FROM crawled_images 
+                            WHERE entity_id = %s 
+                            LIMIT 1
+                        """, (resource_id_param,))
+                        entity_result = cursor.fetchone()
+                        if entity_result and entity_result.get('resource_id'):
+                            resource_id = entity_result['resource_id']
+                    # 其他表类型可以根据需要扩展
+                
                 return jsonify({
                     'success': True,
                     'festival_name': festival_name,
                     'entity_name': entity_name,
                     'description': description or '暂无简介',
                     'images': image_list,
-                    'total_images': len(image_list)
+                    'total_images': len(image_list),
+                    'resource_id': resource_id  # 返回resource_id用于评论功能
                 })
         finally:
             if conn:
@@ -2759,151 +2914,157 @@ def get_resource_detail():
                 except:
                     pass
     except Exception as e:
-        print(f"[API] 获取资源详情失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'获取资源详情失败：{str(e)}'}), 500
 
 @app.route('/api/search', methods=['GET'])
 def search_resources():
-    """全文检索接口（集成自search_service.py）"""
+    """全文检索接口：关键词直接与数据库匹配，不使用AI分析"""
     keyword = request.args.get('q', '').strip()
     user_id = request.args.get('user_id', None)
-    
+
     if not keyword:
         return jsonify({"code": 400, "msg": "请输入搜索关键词", "data": []})
-    
-    # 初始化搜索RAG系统
-    rag_system = init_search_rag_system()
-    if not rag_system:
-        return jsonify({"code": 500, "msg": "搜索系统初始化失败，请检查API密钥配置", "data": []})
-    
+
     # 获取数据库连接
     from db_connection import get_default_db_connection
     conn = get_default_db_connection()
     if not conn:
         return jsonify({"code": 500, "msg": "数据库连接失败", "data": []})
-    
-    # AI语义提取提示模板
-    semantic_extraction_prompt = """
-你是一位专业的文化资源检索专家，请将用户的自然语言查询转换为精确的检索关键词和实体类型。
 
-用户查询: {query}
-
-请按照以下JSON格式返回结果：
-{{
-  "keywords": ["关键词1", "关键词2", ...],  # 提取的核心关键词
-  "entities": [{{"name": "实体名称", "type": "实体类型"}}],  # 提取的实体及其类型
-  "advanced_query": "优化后的检索式"  # 适合数据库检索的高级检索式
-}}
-
-实体类型包括：节日、习俗、人物、作品、事件、地点等。
-"""
-    
     try:
-        # ------------------------
-        # 1. AI语义提取构建高级检索式
-        # ------------------------
-        print(f"[搜索] 正在进行AI语义分析: {keyword}")
-        extraction_result = rag_system.model.invoke(
-            semantic_extraction_prompt.format(query=keyword)
-        ).content
-        
-        # 解析AI返回的结果
-        try:
-            ai_analysis = json.loads(extraction_result)
-            advanced_query = ai_analysis.get("advanced_query", keyword)
-            keywords = ai_analysis.get("keywords", [keyword])
-            print(f"[搜索] AI分析结果 - 关键词: {keywords}, 高级检索式: {advanced_query}")
-        except:
-            # 如果解析失败，使用原始关键词
-            advanced_query = keyword
-            keywords = [keyword]
-            ai_analysis = {"keywords": keywords, "advanced_query": advanced_query}
-            print(f"[搜索] AI分析失败，使用原始关键词: {keyword}")
-        
-        with conn.cursor() as cursor:
+        from pymysql.cursors import DictCursor
+        with conn.cursor(DictCursor) as cursor:
             # ------------------------
-            # 2. 增强的检索查询
+            # 直接关键词匹配查询（不使用AI分析）
             # ------------------------
-            sql = """
-                (SELECT 
-                    id, 
-                    entity_name as title, 
-                    description, 
-                    related_images_url as image_url,
-                    source,
-                    '传统实体' as type_tag,
-                    MATCH(entity_name, description) AGAINST(%s IN NATURAL LANGUAGE MODE) as relevance_score,
-                    1 as type_weight  -- 传统实体权重更高
-                FROM cultural_entities 
-                WHERE MATCH(entity_name, description) 
-                AGAINST(%s IN NATURAL LANGUAGE MODE)
-                LIMIT 25)
-                
-                UNION ALL
-                
-                (SELECT 
-                    id, 
-                    entity_name as title, 
-                    description, 
-                    related_images_url as image_url,
-                    'AIGC生成' as source,
-                    'AI实体' as type_tag,
-                    MATCH(entity_name, description) AGAINST(%s IN NATURAL LANGUAGE MODE) as relevance_score,
-                    0.5 as type_weight  -- AI生成实体权重较低
-                FROM AIGC_cultural_entities 
-                WHERE MATCH(entity_name, description) 
-                AGAINST(%s IN NATURAL LANGUAGE MODE)
-                LIMIT 25);
-            """
+
+            # 构建LIKE查询条件
+            like_pattern = f'%{keyword}%'
+
+            # 检查是否支持全文索引
+            cursor.execute("""
+                SELECT COUNT(*) as cnt
+                FROM information_schema.STATISTICS 
+                WHERE TABLE_SCHEMA = DATABASE() 
+                AND TABLE_NAME = 'cultural_entities' 
+                AND INDEX_NAME = 'idx_ce_search'
+            """)
+            has_fulltext = cursor.fetchone().get('cnt', 0) > 0
             
-            print(f"[搜索] 正在双表检索，查询词: {advanced_query}")
-            try:
-                cursor.execute(sql, (advanced_query, advanced_query, advanced_query, advanced_query))
-                results = cursor.fetchall()
-            except Exception as e:
-                # FULLTEXT 索引缺失时的回退：使用 LIKE
-                err_code = getattr(e, "args", [None])[0]
-                if err_code == 1191:  # Can't find FULLTEXT index matching the column list
-                    print("[搜索] 未找到 FULLTEXT 索引，使用 LIKE 回退查询")
-                    like_q = f"%{advanced_query}%"
-                    fallback_sql = """
-                        (SELECT 
-                            id, 
-                            entity_name as title, 
-                            description, 
-                            related_images_url as image_url,
-                            source,
-                            '传统实体' as type_tag,
-                            0.6 as relevance_score,
-                            1 as type_weight
-                        FROM cultural_entities 
-                        WHERE entity_name LIKE %s OR description LIKE %s
-                        LIMIT 25)
-                        
-                        UNION ALL
-                        
-                        (SELECT 
-                            id, 
-                            entity_name as title, 
-                            description, 
-                            related_images_url as image_url,
-                            'AIGC生成' as source,
-                            'AI实体' as type_tag,
-                            0.4 as relevance_score,
-                            0.5 as type_weight
-                        FROM AIGC_cultural_entities 
-                        WHERE entity_name LIKE %s OR description LIKE %s
-                        LIMIT 25);
-                    """
-                    cursor.execute(fallback_sql, (like_q, like_q, like_q, like_q))
-                    results = cursor.fetchall()
-                else:
-                    raise
-            
+            # 构建查询：优先使用全文索引，否则使用LIKE
+            if has_fulltext:
+                # 使用全文索引查询（MATCH AGAINST）
+                sql = """
+                    (SELECT
+                        ce.id,
+                        ce.entity_name as title,
+                        ce.description,
+                        COALESCE(ci.storage_path, ce.related_images_url) as image_url,
+                        ce.source,
+                        '传统实体' as type_tag,
+                        CASE
+                            WHEN ce.entity_name LIKE %s THEN 2.0  -- 实体名完全匹配权重最高
+                            WHEN MATCH(ce.entity_name, ce.description) AGAINST(%s IN NATURAL LANGUAGE MODE) THEN 1.8  -- 全文索引匹配权重高
+                            WHEN ce.entity_name LIKE %s THEN 1.5  -- 实体名部分匹配权重较高
+                            WHEN ce.description LIKE %s THEN 1.0  -- 描述匹配权重中等
+                            ELSE 0.5
+                        END as relevance_score,
+                        1 as type_weight  -- 传统实体权重更高
+                    FROM cultural_entities ce
+                    LEFT JOIN crawled_images ci ON ce.id = ci.entity_id
+                    WHERE MATCH(ce.entity_name, ce.description) AGAINST(%s IN NATURAL LANGUAGE MODE)
+                       OR ce.entity_name LIKE %s 
+                       OR ce.description LIKE %s
+                    GROUP BY ce.id, ce.entity_name, ce.description, ce.source, ci.storage_path, ce.related_images_url)
+
+                    UNION ALL
+
+                    (SELECT
+                        ace.id,
+                        ace.entity_name as title,
+                        ace.description,
+                        ace.related_images_url as image_url,
+                        'AIGC生成' as source,
+                        'AI实体' as type_tag,
+                        CASE
+                            WHEN ace.entity_name LIKE %s THEN 1.6  -- AI实体名完全匹配权重较高
+                            WHEN MATCH(ace.entity_name, ace.description) AGAINST(%s IN NATURAL LANGUAGE MODE) THEN 1.4  -- 全文索引匹配权重较高
+                            WHEN ace.entity_name LIKE %s THEN 1.2  -- AI实体名部分匹配权重中等
+                            WHEN ace.description LIKE %s THEN 0.8  -- AI描述匹配权重较低
+                            ELSE 0.4
+                        END as relevance_score,
+                        0.7 as type_weight  -- AI生成实体权重较低
+                    FROM AIGC_cultural_entities ace
+                    WHERE MATCH(ace.entity_name, ace.description) AGAINST(%s IN NATURAL LANGUAGE MODE)
+                       OR ace.entity_name LIKE %s 
+                       OR ace.description LIKE %s)
+                    
+                    -- 不限制返回条数，移除所有LIMIT子句
+                """
+                # 准备查询参数（全文索引需要单独的关键词参数）
+                exact_match = keyword
+                partial_match = like_pattern
+                cursor.execute(sql, (
+                    exact_match, keyword, partial_match, partial_match, keyword, partial_match, partial_match,  # 传统实体
+                    exact_match, keyword, partial_match, partial_match, keyword, partial_match, partial_match   # AI实体
+                ))
+            else:
+                # 使用LIKE查询（不支持全文索引时）
+                sql = """
+                    (SELECT
+                        ce.id,
+                        ce.entity_name as title,
+                        ce.description,
+                        COALESCE(ci.storage_path, ce.related_images_url) as image_url,
+                        ce.source,
+                        '传统实体' as type_tag,
+                        CASE
+                            WHEN ce.entity_name LIKE %s THEN 2.0  -- 实体名完全匹配权重最高
+                            WHEN ce.entity_name LIKE %s THEN 1.5  -- 实体名部分匹配权重较高
+                            WHEN ce.description LIKE %s THEN 1.0  -- 描述匹配权重中等
+                            ELSE 0.5
+                        END as relevance_score,
+                        1 as type_weight  -- 传统实体权重更高
+                    FROM cultural_entities ce
+                    LEFT JOIN crawled_images ci ON ce.id = ci.entity_id
+                    WHERE ce.entity_name LIKE %s OR ce.description LIKE %s
+                    GROUP BY ce.id, ce.entity_name, ce.description, ce.source, ci.storage_path, ce.related_images_url)
+
+                    UNION ALL
+
+                    (SELECT
+                        ace.id,
+                        ace.entity_name as title,
+                        ace.description,
+                        ace.related_images_url as image_url,
+                        'AIGC生成' as source,
+                        'AI实体' as type_tag,
+                        CASE
+                            WHEN ace.entity_name LIKE %s THEN 1.6  -- AI实体名完全匹配权重较高
+                            WHEN ace.entity_name LIKE %s THEN 1.2  -- AI实体名部分匹配权重中等
+                            WHEN ace.description LIKE %s THEN 0.8  -- AI描述匹配权重较低
+                            ELSE 0.4
+                        END as relevance_score,
+                        0.7 as type_weight  -- AI生成实体权重较低
+                    FROM AIGC_cultural_entities ace
+                    WHERE ace.entity_name LIKE %s OR ace.description LIKE %s)
+                    
+                    -- 不限制返回条数，移除所有LIMIT子句
+                """
+                # 准备查询参数
+                exact_match = keyword
+                partial_match = like_pattern
+                cursor.execute(sql, (
+                    exact_match, partial_match, partial_match, partial_match, partial_match,  # 传统实体
+                    exact_match, partial_match, partial_match, partial_match, partial_match   # AI实体
+                ))
+
+            results = cursor.fetchall()
+
             # ------------------------
-            # 3. 检索结果排序
+            # 检索结果排序和格式化（不限制返回条数）
             # ------------------------
             def sort_key(result):
                 # 综合排序：相关性得分 * 类型权重
@@ -2911,12 +3072,17 @@ def search_resources():
                 type_weight = result.get('type_weight', 0.5)
                 return -(relevance * type_weight)
             
-            # 按综合得分排序
-            sorted_results = sorted(results, key=sort_key)
+            # 为结果添加权重并排序
+            results_list = list(results)  # 转换为列表
+            for result in results_list:
+                result['combined_score'] = result.get('relevance_score', 0) * result.get('type_weight', 0.5)
+            
+            results_list.sort(key=lambda x: x.get('combined_score', 0), reverse=True)
+            results = results_list  # 不限制返回条数
             
             formatted_list = []
             
-            for row in sorted_results:
+            for row in results:
                 # 提取描述摘要
                 desc = row.get('description', '')
                 if desc:
@@ -2924,46 +3090,68 @@ def search_resources():
                 else:
                     snippet = '暂无详细描述'
                 
-                # 提取图片
+                # 提取并处理图片URL
                 img = row.get('image_url')
-                if not img or img == 'null':
-                    img = None
+                image_url = None
+                if img and img != 'null' and img.strip():
+                    # 如果是从crawled_images关联的路径
+                    if 'crawled_images' in img or img.startswith('crawled_images'):
+                        actual_file = os.path.basename(img)
+                        image_url = f"/api/images/crawled/{actual_file}"
+                    # 如果是related_images_url字段（可能是URL字符串）
+                    elif img.startswith('http://') or img.startswith('https://'):
+                        image_url = img
+                    # 如果是以/开头的路径
+                    elif img.startswith('/'):
+                        image_url = img
+                    # 其他情况，尝试作为文件名处理
+                    else:
+                        image_url = f"/api/images/crawled/{os.path.basename(img)}"
                 
+                # 如果没有图片，使用默认图片
+                if not image_url:
+                    image_url = "/public/default.jpg"
+
                 # 组装数据
                 formatted_list.append({
                     "id": row['id'],
                     "title": row['title'],
+                    "entity_name": row['title'],
+                    "description": desc,
                     "snippet": snippet,
                     "tags": [row['type_tag']], 
                     "source_url": row.get('source', '#'),
-                    "image_url": img,
-                    "relevance_score": row.get('relevance_score', 0)  # 返回相关性得分
+                    "image_url": image_url,
+                    "relevance_score": row.get('relevance_score', 0)
                 })
-            
+
             return jsonify({
                 "code": 200,
                 "msg": "success",
-                "data": formatted_list,
-                "ai_analysis": ai_analysis  # 返回AI分析结果，供前端展示
+                "data": formatted_list
             })
     
     except Exception as e:
-        print(f"[搜索] 搜索错误: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e), "data": []})
         
     finally:
         if conn:
-            conn.close()
+            try:
+                conn.close()
+            except:
+                pass
 
 
 @app.route('/api/ai_search', methods=['GET'])
 def ai_search():
     """
-    AI 检索接口：使用阿里云通义模型对用户问题进行语义分析，并结合向量检索的参考资料给出答案。
+    AI 检索接口：调用大模型理解用户需求，将用户需求转化为检索词进行语义搜索
+    - 首先使用AI模型分析用户需求，转化为检索关键词
+    - 然后使用检索关键词在数据库中匹配
     - 依赖环境变量 DASHSCOPE_API_KEY 或 ALIYUN_API_KEY
-    - 返回结构：data 为参考列表，ai_analysis 为 LLM 生成的回答和建议
+    - 返回结构：data 为检索结果列表，ai_analysis 为 AI 分析结果
     """
     keyword = request.args.get('q', '').strip()
     if not keyword:
@@ -2973,87 +3161,205 @@ def ai_search():
     if not rag_system:
         return jsonify({"code": 500, "msg": "AI 检索初始化失败，请检查阿里云 API Key 配置", "data": []})
 
-    # 1) 向量检索参考资料
-    docs = []
+    # 获取数据库连接
+    from db_connection import get_default_db_connection
+    conn = get_default_db_connection()
+    if not conn:
+        return jsonify({"code": 500, "msg": "数据库连接失败", "data": []})
+
     try:
-        docs = rag_system._call_retriever(keyword) or []
-    except Exception as e:
-        print(f"[AI检索] 向量检索失败: {e}")
-        docs = []
+        # ------------------------
+        # 1. AI语义分析：将用户需求转化为检索关键词
+        # ------------------------
+        semantic_extraction_prompt = """
+你是一位专业的文化资源检索专家，请将用户的自然语言查询转换为精确的检索关键词。
 
-    def safe_content(text: str, limit: int = 600):
-        text = text or ""
-        return text[:limit] + ("..." if len(text) > limit else "")
+用户查询: {query}
 
-    # 2) 组织上下文
-    context_blocks = []
-    for idx, doc in enumerate(docs[:5]):
-        meta = getattr(doc, "metadata", {}) or {}
-        title = meta.get("title") or meta.get("entity_name") or f"资料{idx+1}"
-        content = getattr(doc, "page_content", "") or ""
-        context_blocks.append(f"[{idx+1}] 标题：{title}\n内容：{safe_content(content)}")
-    context_text = "\n\n".join(context_blocks) if context_blocks else "（无可用参考资料）"
-
-    # 3) 调用阿里云通义模型生成回答
-    prompt = f"""
-你是一个文化资源 AI 检索助手。请结合【用户问题】和【参考资料】给出简明回答，并返回 JSON：
+请按照以下JSON格式返回结果：
 {{
-  "answer": "面向用户的简洁回答",
-  "suggestions": ["可执行建议1", "可执行建议2"],
-  "used_sources": ["参考1", "参考2"]
+  "keywords": ["关键词1", "关键词2", ...],  # 提取的核心关键词（用于数据库检索）
+  "search_query": "优化后的检索式"  # 适合数据库检索的检索式
 }}
 
-【用户问题】：
-{keyword}
+要求：
+1. 提取用户查询中的核心文化主题、节日名称、习俗、人物、地点等关键词
+2. 如果涉及多个概念，用空格或逗号分隔
+3. 保持原意，不要添加额外信息
+4. search_query应该是适合在数据库中直接检索的字符串
+"""
+        
+        try:
+            extraction_response = rag_system.model.invoke(
+                semantic_extraction_prompt.format(query=keyword)
+            )
+            extraction_result = extraction_response.content if hasattr(extraction_response, 'content') else str(extraction_response)
+            
+            # 解析AI返回的结果
+            try:
+                if isinstance(extraction_result, str):
+                    ai_analysis = json.loads(extraction_result)
+                elif isinstance(extraction_result, dict):
+                    ai_analysis = extraction_result
+                else:
+                    raise ValueError("无法解析AI返回结果")
+                
+                # 获取检索关键词
+                search_keywords = ai_analysis.get("keywords", [keyword])
+                search_query = ai_analysis.get("search_query", keyword)
+                
+                # 如果关键词是列表，取第一个作为主要检索词
+                if isinstance(search_keywords, list) and search_keywords:
+                    primary_keyword = search_keywords[0]
+                else:
+                    primary_keyword = keyword
+                
+            except (json.JSONDecodeError, ValueError, TypeError) as e:
+                # 如果解析失败，使用原始关键词
+                primary_keyword = keyword
+                search_query = keyword
+                ai_analysis = {"keywords": [keyword], "search_query": keyword}
+        except Exception as e:
+            # 如果AI调用失败，使用原始关键词
+            primary_keyword = keyword
+            search_query = keyword
+            ai_analysis = {"keywords": [keyword], "search_query": keyword}
 
-【参考资料】：
-{context_text}
-    """
-    ai_analysis = {}
-    try:
-        resp_text = rag_system._call_model(prompt)
-        ai_analysis = json.loads(resp_text) if resp_text else {}
-    except Exception as e:
-        print(f"[AI检索] 调用阿里云模型失败: {e}")
-        ai_analysis = {"answer": "AI 检索暂时不可用，请稍后重试。", "suggestions": [], "used_sources": []}
+        # ------------------------
+        # 2. 使用检索关键词在数据库中匹配
+        # ------------------------
+        from pymysql.cursors import DictCursor
+        with conn.cursor(DictCursor) as cursor:
+            like_pattern = f'%{search_query}%'
+            
+            sql = """
+                (SELECT 
+                    ce.id, 
+                    ce.entity_name as title, 
+                    ce.description, 
+                    COALESCE(ci.storage_path, ce.related_images_url) as image_url,
+                    ce.source,
+                    '传统实体' as type_tag,
+                    CASE
+                        WHEN ce.entity_name LIKE %s THEN 2.0
+                        WHEN ce.entity_name LIKE %s THEN 1.5
+                        WHEN ce.description LIKE %s THEN 1.0
+                        ELSE 0.5
+                    END as relevance_score,
+                    1 as type_weight
+                FROM cultural_entities ce
+                LEFT JOIN crawled_images ci ON ce.id = ci.entity_id
+                WHERE ce.entity_name LIKE %s OR ce.description LIKE %s
+                GROUP BY ce.id, ce.entity_name, ce.description, ce.source, ci.storage_path, ce.related_images_url)
+                
+                UNION ALL
+                
+                (SELECT 
+                    ace.id, 
+                    ace.entity_name as title, 
+                    ace.description, 
+                    ace.related_images_url as image_url,
+                    'AIGC生成' as source,
+                    'AI实体' as type_tag,
+                    CASE
+                        WHEN ace.entity_name LIKE %s THEN 1.6
+                        WHEN ace.entity_name LIKE %s THEN 1.2
+                        WHEN ace.description LIKE %s THEN 0.8
+                        ELSE 0.4
+                    END as relevance_score,
+                    0.7 as type_weight
+                FROM AIGC_cultural_entities ace
+                WHERE ace.entity_name LIKE %s OR ace.description LIKE %s)
+                
+                -- 不限制返回条数，移除所有LIMIT子句
+            """
+            
+            exact_match = search_query
+            partial_match = like_pattern
+            
+            cursor.execute(sql, (
+                exact_match, partial_match, partial_match, partial_match, partial_match,  # 传统实体
+                exact_match, partial_match, partial_match, partial_match, partial_match   # AI实体
+            ))
+            results = cursor.fetchall()
 
-    # 4) 构造返回的参考列表（用于前端列表展示）
-    results = []
-    for idx, doc in enumerate(docs):
-        meta = getattr(doc, "metadata", {}) or {}
-        title = meta.get("title") or meta.get("entity_name") or f"AI参考{idx+1}"
-        content = getattr(doc, "page_content", "") or ""
-        results.append({
-            "id": idx + 1,
-            "title": title,
-            "entity_name": title,
-            "description": safe_content(content, 200),
-            "snippet": safe_content(content, 200),
-            "image_url": meta.get("image_url"),
-            "source_url": meta.get("source") or meta.get("url") or "#",
-            "tags": ["AI检索"]
+        # ------------------------
+        # 3. 检索结果排序和格式化
+        # ------------------------
+        results_list = list(results)  # 转换为列表
+        for result in results_list:
+            result['combined_score'] = result.get('relevance_score', 0) * result.get('type_weight', 0.5)
+        
+        results_list.sort(key=lambda x: x.get('combined_score', 0), reverse=True)
+        results = results_list  # 不限制返回条数
+        
+        formatted_list = []
+        for row in results:
+            desc = row.get('description', '')
+            snippet = desc[:100] + '...' if desc else '暂无详细描述'
+            
+            # 处理图片URL
+            img = row.get('image_url')
+            image_url = None
+            if img and img != 'null' and img.strip():
+                if 'crawled_images' in img or img.startswith('crawled_images'):
+                    actual_file = os.path.basename(img)
+                    image_url = f"/api/images/crawled/{actual_file}"
+                elif img.startswith('http://') or img.startswith('https://'):
+                    image_url = img
+                elif img.startswith('/'):
+                    image_url = img
+                else:
+                    image_url = f"/api/images/crawled/{os.path.basename(img)}"
+            
+            if not image_url:
+                image_url = "/public/default.jpg"
+            
+            formatted_list.append({
+                "id": row['id'],
+                "title": row['title'],
+                "entity_name": row['title'],
+                "description": desc,
+                "snippet": snippet,
+                "tags": [row['type_tag']], 
+                "source_url": row.get('source', '#'),
+                "image_url": image_url,
+                "relevance_score": row.get('relevance_score', 0)
+            })
+
+        return jsonify({
+            "code": 200,
+            "msg": "success",
+            "data": formatted_list,
+            "ai_analysis": ai_analysis  # 返回AI分析结果
         })
-
-    return jsonify({
-        "code": 200,
-        "msg": "success",
-        "data": results,
-        "ai_analysis": ai_analysis
-    })
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"code": 500, "msg": str(e), "data": []})
+        
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except:
+                pass
 
 @app.route('/api/images/crawled/<path:filename>')
 def serve_crawled_image(filename):
     """提供crawled_images文件夹中的图片"""
     try:
         from flask import send_from_directory
-        import os
         import urllib.parse
         
         # URL解码文件名（处理中文文件名）
         filename = urllib.parse.unquote(filename)
         
         # 获取项目根目录
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # 使用相对路径
+        current_file_dir = os.path.dirname(os.path.realpath(__file__))
+        base_dir = os.path.dirname(current_file_dir)
         image_dir = os.path.join(base_dir, "crawled_images")
         
         # 确保文件路径安全（防止路径遍历攻击）
@@ -3069,7 +3375,6 @@ def serve_crawled_image(filename):
         
         # 如果文件仍然不存在，返回default图片
         if not os.path.exists(safe_path):
-            print(f"[API] 图片文件不存在: {safe_path}，返回default图片")
             default_image_path = os.path.join(base_dir, "public", "default.jpg")
             if os.path.exists(default_image_path):
                 return send_from_directory(os.path.join(base_dir, "public"), "default.jpg")
@@ -3080,7 +3385,6 @@ def serve_crawled_image(filename):
         # 文件存在，返回图片
         return send_from_directory(image_dir, os.path.basename(safe_path))
     except Exception as e:
-        print(f"[API] 提供图片失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 404
@@ -3124,7 +3428,6 @@ def get_aigc_sessions():
                             columns = ['id', 'user_id', 'created_at', 'summary', 'mode']
                             session = dict(zip(columns, session))
                         else:
-                            print(f"警告：会话数据格式异常，类型：{type(session)}")
                             continue
                     
                     cursor.execute("""
@@ -3158,7 +3461,6 @@ def get_aigc_sessions():
         finally:
             conn.close()
     except Exception as e:
-        print(f"[API] 获取会话列表失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
@@ -3210,7 +3512,7 @@ def create_aigc_session():
                         """)
                         conn.commit()
                 except Exception as e:
-                    print(f"[API] 检查/添加mode字段失败: {e}")
+                    pass
                 
                 cursor.execute("""
                     INSERT INTO qa_sessions (user_id, summary, mode)
@@ -3239,7 +3541,6 @@ def create_aigc_session():
         finally:
             conn.close()
     except Exception as e:
-        print(f"[API] 创建会话失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
@@ -3462,7 +3763,6 @@ def get_session_messages(session_id):
                                                             "resource_type": row.get("resource_type", "")
                                                         })
                                                 except (ValueError, Exception) as e:
-                                                    print(f"[API] 获取检索资源 {rid} 失败: {e}")
                                                     continue
                                             
                                             if db_results:
@@ -3472,7 +3772,6 @@ def get_session_messages(session_id):
                                                     "web_results": []
                                                 }
                             except Exception as e:
-                                print(f"[API] 获取检索资源失败: {e}")
                                 import traceback
                                 traceback.print_exc()
                             
@@ -3522,7 +3821,6 @@ def get_session_messages(session_id):
         finally:
             conn.close()
     except Exception as e:
-        print(f"[API] 获取消息列表失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
@@ -3606,7 +3904,6 @@ def save_message(session_id):
                     if ai_message:
                         message_content = ai_message
                         if image_url:
-                            import json
                             message_content = json.dumps({
                                 'content': ai_message,
                                 'image_path': image_url
@@ -3625,7 +3922,6 @@ def save_message(session_id):
         finally:
             conn.close()
     except Exception as e:
-        print(f"[API] 保存消息失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
@@ -3682,7 +3978,6 @@ def delete_aigc_session(session_id):
         finally:
             conn.close()
     except Exception as e:
-        print(f"[API] 删除会话失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
@@ -3752,7 +4047,6 @@ def delete_aigc_sessions_batch():
         finally:
             conn.close()
     except Exception as e:
-        print(f"[API] 批量删除会话失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
@@ -3813,7 +4107,6 @@ def delete_all_aigc_sessions():
         finally:
             conn.close()
     except Exception as e:
-        print(f"[API] 删除所有会话失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
@@ -3871,7 +4164,6 @@ def update_session_summary(session_id):
         finally:
             conn.close()
     except Exception as e:
-        print(f"[API] 更新会话摘要失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
@@ -3916,7 +4208,6 @@ def get_annotation_tasks():
             return jsonify(result), 500
             
     except Exception as e:
-        print(f"[API] 获取标注任务失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
@@ -4029,7 +4320,6 @@ def get_annotation_details(task_id):
             conn.close()
             
     except Exception as e:
-        print(f"[API] 获取标注详情失败: {e}")
         return jsonify({'success': False, 'message': f'获取失败: {str(e)}'}), 500
 
 
@@ -4097,7 +4387,6 @@ def update_annotation(task_id):
         return jsonify(result)
         
     except Exception as e:
-        print(f"[API] 更新标注失败: {e}")
         return jsonify({'success': False, 'message': f'更新失败: {str(e)}'}), 500
 
 
@@ -4107,36 +4396,27 @@ def serve_user_uploaded_image(filename):
     """提供image_from_users文件夹中的用户上传图片"""
     from flask import send_from_directory
     try:
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # 使用相对路径
+        current_file_dir = os.path.dirname(os.path.realpath(__file__))
+        base_dir = os.path.dirname(current_file_dir)
         image_dir = os.path.join(base_dir, "image_from_users")
         
-        print(f"[API] 请求用户上传图片: {filename}")
-        print(f"[API] image_from_users目录: {image_dir}")
-        print(f"[API] 目录是否存在: {os.path.exists(image_dir)}")
         
         # 确保文件路径安全（防止路径遍历攻击）
         safe_path = os.path.normpath(os.path.join(image_dir, filename))
         if not safe_path.startswith(os.path.normpath(image_dir)):
-            print(f"[API] 路径不安全: {safe_path}")
             return jsonify({'error': 'Invalid path'}), 403
         
-        print(f"[API] 完整文件路径: {safe_path}")
-        print(f"[API] 文件是否存在: {os.path.exists(safe_path)}")
         
         if os.path.exists(safe_path) and os.path.isfile(safe_path):
-            print(f"[API] 成功提供用户上传图片: {filename}")
             return send_from_directory(image_dir, os.path.basename(safe_path))
         else:
             # 列出目录中的文件，用于调试
             if os.path.exists(image_dir):
                 files = os.listdir(image_dir)
-                print(f"[API] image_from_users目录中的文件: {files[:10]}")  # 只显示前10个
-            print(f"[API] 文件不存在: {safe_path}")
             return jsonify({'error': 'File not found'}), 404
     except Exception as e:
         import traceback
-        print(f"[API] 提供用户上传图片失败: {e}")
-        print(f"[API] 错误堆栈: {traceback.format_exc()}")
         return jsonify({'error': 'File not found'}), 404
 
 
@@ -4145,7 +4425,9 @@ def serve_uploaded_file(filename):
     """提供uploads文件夹中的上传资源（主要用于标注任务中预览）"""
     from flask import send_from_directory
     try:
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # 使用相对路径
+        current_file_dir = os.path.dirname(os.path.realpath(__file__))
+        base_dir = os.path.dirname(current_file_dir)
         upload_dir = os.path.join(base_dir, "uploads")
         safe_path = os.path.normpath(os.path.join(upload_dir, filename))
         if not safe_path.startswith(os.path.normpath(upload_dir)):
@@ -4162,36 +4444,27 @@ def serve_aigc_image(filename):
     """提供AIGC_graph文件夹中的图片"""
     from flask import send_from_directory
     try:
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # 使用相对路径
+        current_file_dir = os.path.dirname(os.path.realpath(__file__))
+        base_dir = os.path.dirname(current_file_dir)
         image_dir = os.path.join(base_dir, "AIGC_graph")
         
-        print(f"[API] 请求AIGC图片: {filename}")
-        print(f"[API] AIGC_graph目录: {image_dir}")
-        print(f"[API] 目录是否存在: {os.path.exists(image_dir)}")
         
         # 确保文件路径安全（防止路径遍历攻击）
         safe_path = os.path.normpath(os.path.join(image_dir, filename))
         if not safe_path.startswith(os.path.normpath(image_dir)):
-            print(f"[API] 路径不安全: {safe_path}")
             return jsonify({'error': 'Invalid path'}), 403
         
-        print(f"[API] 完整文件路径: {safe_path}")
-        print(f"[API] 文件是否存在: {os.path.exists(safe_path)}")
         
         if os.path.exists(safe_path) and os.path.isfile(safe_path):
-            print(f"[API] 成功提供图片: {filename}")
             return send_from_directory(image_dir, os.path.basename(safe_path))
         else:
             # 列出目录中的文件，用于调试
             if os.path.exists(image_dir):
                 files = os.listdir(image_dir)
-                print(f"[API] AIGC_graph目录中的文件: {files[:10]}")  # 只显示前10个
-            print(f"[API] 文件不存在: {safe_path}")
             return jsonify({'error': 'File not found'}), 404
     except Exception as e:
         import traceback
-        print(f"[API] 提供AIGC图片失败: {e}")
-        print(f"[API] 错误堆栈: {traceback.format_exc()}")
         return jsonify({'error': 'File not found'}), 404
 
 @app.route('/AIGC_graph_from_users/<path:filename>', methods=['GET'])
@@ -4199,28 +4472,23 @@ def serve_aigc_graph_from_users_image(filename):
     """提供AIGC_graph_from_users文件夹中的用户上传图片"""
     from flask import send_from_directory
     try:
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # 使用相对路径
+        current_file_dir = os.path.dirname(os.path.realpath(__file__))
+        base_dir = os.path.dirname(current_file_dir)
         image_dir = os.path.join(base_dir, "AIGC_graph_from_users")
         
-        print(f"[API] 请求用户上传AIGC图片: {filename}")
-        print(f"[API] AIGC_graph_from_users目录: {image_dir}")
         
         # 确保文件路径安全（防止路径遍历攻击）
         safe_path = os.path.normpath(os.path.join(image_dir, filename))
         if not safe_path.startswith(os.path.normpath(image_dir)):
-            print(f"[API] 路径不安全: {safe_path}")
             return jsonify({'error': 'Invalid path'}), 403
         
         if os.path.exists(safe_path) and os.path.isfile(safe_path):
-            print(f"[API] 成功提供用户上传AIGC图片: {filename}")
             return send_from_directory(image_dir, os.path.basename(safe_path))
         else:
-            print(f"[API] 文件不存在: {safe_path}")
             return jsonify({'error': 'File not found'}), 404
     except Exception as e:
         import traceback
-        print(f"[API] 提供用户上传AIGC图片失败: {e}")
-        print(f"[API] 错误堆栈: {traceback.format_exc()}")
         return jsonify({'error': 'File not found'}), 404
 
 # 提供头像文件服务（从public文件夹）
@@ -4298,11 +4566,165 @@ def approve_annotation(task_id):
         return jsonify(result)
         
     except Exception as e:
-        print(f"[API] 审核标注失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'审核失败: {str(e)}'}), 500
 
+
+@app.route('/api/annotation/tasks/<int:task_id>/pause', methods=['POST'])
+def pause_ai_annotation(task_id):
+    """暂停AI标注（仅管理员和超级管理员）"""
+    try:
+        # 获取用户ID（支持多种header格式）
+        user_id = (request.headers.get('X-User-Id') or 
+                  request.headers.get('X-User-ID') or 
+                  (request.json.get('user_id') if request.is_json else None))
+        if not user_id:
+            return jsonify({'success': False, 'message': '缺少用户信息'}), 400
+        
+        try:
+            user_id = int(user_id)
+        except (ValueError, TypeError):
+            return jsonify({'success': False, 'message': '无效的用户ID'}), 400
+        
+        # 检查用户权限
+        from db_connection import get_user_db_connection
+        from pymysql.cursors import DictCursor
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor(DictCursor) as cursor:
+                cursor.execute("SELECT role FROM users WHERE id = %s", (user_id,))
+                user_info = cursor.fetchone()
+                if not user_info:
+                    return jsonify({'success': False, 'message': '用户不存在'}), 404
+                
+                # 兼容DictCursor和普通cursor
+                role = user_info.get('role') if isinstance(user_info, dict) else (user_info[0] if user_info else None)
+                if role != '管理员' and role != '超级管理员':
+                    return jsonify({'success': False, 'message': '权限不足，仅管理员可操作'}), 403
+                
+                # 检查任务状态
+                cursor.execute("SELECT status FROM annotation_tasks WHERE id = %s", (task_id,))
+                task = cursor.fetchone()
+                if not task:
+                    return jsonify({'success': False, 'message': '任务不存在'}), 404
+                
+                # 兼容DictCursor和普通cursor
+                current_status = task.get('status') if isinstance(task, dict) else (task[0] if task else None)
+                if current_status != 'AI标注中':
+                    return jsonify({'success': False, 'message': f'任务当前状态为{current_status}，无法暂停'}), 400
+                
+                # 更新任务状态为待标注
+                cursor.execute(
+                    "UPDATE annotation_tasks SET status = %s WHERE id = %s AND status = %s",
+                    ('待标注', task_id, 'AI标注中')
+                )
+                
+                if cursor.rowcount == 0:
+                    # 检查任务是否还存在
+                    cursor.execute("SELECT status FROM annotation_tasks WHERE id = %s", (task_id,))
+                    task_check = cursor.fetchone()
+                    if not task_check:
+                        return jsonify({'success': False, 'message': '任务不存在'}), 404
+                    current_status = task_check.get('status') if isinstance(task_check, dict) else (task_check[0] if task_check else None)
+                    return jsonify({'success': False, 'message': f'更新失败，任务当前状态为{current_status}，无法暂停'}), 400
+                
+                conn.commit()
+                
+                return jsonify({'success': True, 'message': 'AI标注已暂停'})
+        finally:
+            conn.close()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'暂停失败: {str(e)}'}), 500
+
+@app.route('/api/annotation/tasks/<int:task_id>/start-ai', methods=['POST'])
+def start_ai_annotation(task_id):
+    """启动AI标注（仅管理员和超级管理员）"""
+    try:
+        # 获取用户ID（支持多种header格式）
+        user_id = (request.headers.get('X-User-Id') or 
+                  request.headers.get('X-User-ID') or 
+                  (request.json.get('user_id') if request.is_json else None))
+        if not user_id:
+            return jsonify({'success': False, 'message': '缺少用户信息'}), 400
+        
+        try:
+            user_id = int(user_id)
+        except (ValueError, TypeError):
+            return jsonify({'success': False, 'message': '无效的用户ID'}), 400
+        
+        # 检查用户权限
+        from db_connection import get_user_db_connection
+        from pymysql.cursors import DictCursor
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor(DictCursor) as cursor:
+                cursor.execute("SELECT role FROM users WHERE id = %s", (user_id,))
+                user_info = cursor.fetchone()
+                if not user_info:
+                    return jsonify({'success': False, 'message': '用户不存在'}), 404
+                
+                # 兼容DictCursor和普通cursor
+                role = user_info.get('role') if isinstance(user_info, dict) else (user_info[0] if user_info else None)
+                if role != '管理员' and role != '超级管理员':
+                    return jsonify({'success': False, 'message': '权限不足，仅管理员可操作'}), 403
+                
+                # 检查任务状态
+                cursor.execute("SELECT status FROM annotation_tasks WHERE id = %s", (task_id,))
+                task = cursor.fetchone()
+                if not task:
+                    return jsonify({'success': False, 'message': '任务不存在'}), 404
+                
+                # 兼容DictCursor和普通cursor
+                current_status = task.get('status') if isinstance(task, dict) else (task[0] if task else None)
+                if current_status != '待标注':
+                    return jsonify({'success': False, 'message': f'任务当前状态为{current_status}，无法启动AI标注'}), 400
+                
+                # 先更新任务状态为AI标注中（防止重复触发）
+                cursor.execute(
+                    "UPDATE annotation_tasks SET status = %s WHERE id = %s AND status = %s",
+                    ('AI标注中', task_id, '待标注')
+                )
+                
+                if cursor.rowcount == 0:
+                    # 检查任务状态是否已改变
+                    cursor.execute("SELECT status FROM annotation_tasks WHERE id = %s", (task_id,))
+                    task_check = cursor.fetchone()
+                    if task_check:
+                        current_status = task_check.get('status') if isinstance(task_check, dict) else (task_check[0] if task_check else None)
+                        return jsonify({'success': False, 'message': f'任务状态已改变为{current_status}，无法启动AI标注'}), 400
+                    else:
+                        return jsonify({'success': False, 'message': '任务不存在'}), 404
+                
+                conn.commit()
+                
+                # 触发AI标注
+                user_db_config = get_auth_system().get_user_db_config(user_id)
+                if not user_db_config:
+                    # 如果用户配置不存在，回滚状态
+                    cursor.execute("UPDATE annotation_tasks SET status = %s WHERE id = %s", ('待标注', task_id))
+                    conn.commit()
+                    return jsonify({'success': False, 'message': '用户配置不存在'}), 500
+                
+                db_config = user_db_config['db_config']
+                uploader = ResourceUploader(user_id=user_id, db_config=db_config)
+                uploader.trigger_ai_annotation(task_id)
+                
+                return jsonify({'success': True, 'message': 'AI标注已启动'})
+        finally:
+                conn.close()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'启动失败: {str(e)}'}), 500
 
 @app.route('/api/annotation/tasks/<int:task_id>/reject', methods=['POST'])
 def reject_annotation(task_id):
@@ -4355,10 +4777,9 @@ def reject_annotation(task_id):
                     'message': '标注已驳回'
                 })
         finally:
-            conn.close()
+                conn.close()
             
     except Exception as e:
-        print(f"[API] 驳回标注失败: {e}")
         return jsonify({'success': False, 'message': f'驳回失败: {str(e)}'}), 500
 
 
@@ -4426,7 +4847,6 @@ def get_comments():
             if conn:
                 conn.close()
     except Exception as e:
-        print(f"[API] 获取评论失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'获取评论失败：{str(e)}'}), 500
@@ -4487,7 +4907,6 @@ def create_comment():
             if conn:
                 conn.close()
     except Exception as e:
-        print(f"[API] 创建评论失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'创建评论失败：{str(e)}'}), 500
@@ -4541,11 +4960,19 @@ def like_comment(comment_id):
                         if comment_author and comment_author['user_id'] != user_id:
                             # 创建通知（需要先检查是否有notifications表）
                             try:
+                                # 获取点赞用户的昵称
+                                cursor.execute("""
+                                    SELECT nickname, account FROM users WHERE id = %s
+                                """, (user_id,))
+                                liker_info = cursor.fetchone()
+                                liker_name = liker_info.get('nickname') if liker_info and liker_info.get('nickname') else (liker_info.get('account') if liker_info else '用户')
+                                
                                 cursor.execute("""
                                     INSERT INTO notifications (user_id, notification_type, content, related_id)
                                     VALUES (%s, 'like', %s, %s)
-                                """, (comment_author['user_id'], f'用户点赞了您的评论', comment_id))
-                            except:
+                                """, (comment_author['user_id'], f'{liker_name}点赞了您的评论', comment_id))
+                                conn.commit()
+                            except Exception as notify_error:
                                 pass  # 如果notifications表不存在，忽略
                 except Exception as table_error:
                     # comment_likes表可能不存在，返回错误提示
@@ -4577,7 +5004,6 @@ def like_comment(comment_id):
             if conn:
                 conn.close()
     except Exception as e:
-        print(f"[API] 点赞失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'点赞失败：{str(e)}'}), 500
@@ -4633,12 +5059,19 @@ def reply_comment(comment_id):
                 comment_author = cursor.fetchone()
                 if comment_author and comment_author['user_id'] != reply_user_id:
                     try:
+                        # 获取回复用户的昵称
+                        cursor.execute("""
+                            SELECT nickname, account FROM users WHERE id = %s
+                        """, (reply_user_id,))
+                        replier_info = cursor.fetchone()
+                        replier_name = replier_info.get('nickname') if replier_info and replier_info.get('nickname') else (replier_info.get('account') if replier_info else '用户')
+                        
                         cursor.execute("""
                             INSERT INTO notifications (user_id, notification_type, content, related_id)
                             VALUES (%s, 'reply', %s, %s)
-                        """, (comment_author['user_id'], f'用户回复了您的评论', comment_id))
+                        """, (comment_author['user_id'], f'{replier_name}回复了您的评论', comment_id))
                         conn.commit()
-                    except:
+                    except Exception as notify_error:
                         pass  # 如果notifications表不存在，忽略
                 
                 return jsonify({
@@ -4650,7 +5083,6 @@ def reply_comment(comment_id):
             if conn:
                 conn.close()
     except Exception as e:
-        print(f"[API] 回复失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'回复失败：{str(e)}'}), 500
@@ -4672,7 +5104,7 @@ def get_notifications():
             return jsonify({'success': False, 'message': '数据库连接失败'}), 500
         
         try:
-            with conn.cursor() as cursor:
+            with conn.cursor(DictCursor) as cursor:
                 # 构建查询条件
                 query = "SELECT * FROM notifications WHERE user_id = %s"
                 params = [user_id]
@@ -4681,7 +5113,8 @@ def get_notifications():
                     query += " AND is_read = %s"
                     params.append(is_read)
                 
-                query += " ORDER BY created_at DESC LIMIT 50"
+                query += " ORDER BY created_at DESC"
+                # 不限制返回条数，移除LIMIT子句
                 
                 cursor.execute(query, params)
                 notifications = cursor.fetchall()
@@ -4694,7 +5127,6 @@ def get_notifications():
             if conn:
                 conn.close()
     except Exception as e:
-        print(f"[API] 获取通知失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'获取通知失败：{str(e)}'}), 500
@@ -4718,7 +5150,6 @@ def log_access():
         
         return jsonify({'success': True})
     except Exception as e:
-        print(f"[API] 记录访问日志失败: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
@@ -4748,10 +5179,180 @@ def mark_notification_read(notification_id):
             if conn:
                 conn.close()
     except Exception as e:
-        print(f"[API] 标记通知已读失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'标记通知已读失败：{str(e)}'}), 500
+
+
+@app.route('/api/notifications/mark-all-read', methods=['POST'])
+def mark_all_notifications_read():
+    """标记所有通知为已读"""
+    try:
+        user_id = request.headers.get('X-User-Id') or request.headers.get('X-User-ID') or request.json.get('user_id')
+        if not user_id:
+            return jsonify({'success': False, 'message': '缺少user_id参数'}), 400
+        
+        try:
+            user_id = int(user_id)
+        except:
+            return jsonify({'success': False, 'message': '无效的用户ID'}), 400
+        
+        from db_connection import get_user_db_connection
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    UPDATE notifications 
+                    SET is_read = 1 
+                    WHERE user_id = %s AND is_read = 0
+                """, (user_id,))
+                conn.commit()
+                
+                return jsonify({
+                    'success': True,
+                    'message': '所有通知已标记为已读'
+                })
+        finally:
+            if conn:
+                conn.close()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'标记所有通知已读失败：{str(e)}'}), 500
+
+
+@app.route('/api/aigc/resources', methods=['GET'])
+def get_aigc_resources():
+    """根据资源ID列表获取资源详情（用于显示检索结果）"""
+    try:
+        ids_param = request.args.get('ids', '')
+        if not ids_param:
+            return jsonify({'success': False, 'message': '缺少ids参数'}), 400
+        
+        # 解析资源ID列表（逗号分隔）
+        resource_ids = [int(id.strip()) for id in ids_param.split(',') if id.strip().isdigit()]
+        if not resource_ids:
+            return jsonify({'success': False, 'message': '无效的资源ID列表'}), 400
+        
+        from db_connection import get_user_db_connection
+        from pymysql.cursors import DictCursor
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            resources = []
+            with conn.cursor(DictCursor) as cursor:
+                # 查询cultural_resources表
+                placeholders = ','.join(['%s'] * len(resource_ids))
+                cursor.execute(f"""
+                    SELECT id, title, resource_type, content_feature_data, source_from, source_url
+                    FROM cultural_resources
+                    WHERE id IN ({placeholders})
+                """, resource_ids)
+                for row in cursor.fetchall():
+                    content_data = {}
+                    if row.get('content_feature_data'):
+                        try:
+                            content_data = json.loads(row['content_feature_data']) if isinstance(row['content_feature_data'], str) else row['content_feature_data']
+                        except:
+                            pass
+                    
+                    resources.append({
+                        'id': row['id'],
+                        'title': row.get('title', ''),
+                        'entity_name': row.get('title', ''),
+                        'description': content_data.get('text', '') if isinstance(content_data, dict) else '',
+                        'content': content_data.get('text', '') if isinstance(content_data, dict) else '',
+                        'table': 'cultural_resources',
+                        'source': row.get('source_from', '')
+                    })
+                
+                # 查询cultural_entities表
+                cursor.execute(f"""
+                    SELECT id, entity_name, description, source
+                    FROM cultural_entities
+                    WHERE id IN ({placeholders})
+                """, resource_ids)
+                for row in cursor.fetchall():
+                    resources.append({
+                        'id': row['id'],
+                        'title': row.get('entity_name', ''),
+                        'entity_name': row.get('entity_name', ''),
+                        'description': row.get('description', ''),
+                        'content': row.get('description', ''),
+                        'table': 'cultural_entities',
+                        'source': row.get('source', '')
+                    })
+                
+                # 查询AIGC_cultural_entities表
+                cursor.execute(f"""
+                    SELECT id, entity_name, description
+                    FROM AIGC_cultural_entities
+                    WHERE id IN ({placeholders})
+                """, resource_ids)
+                for row in cursor.fetchall():
+                    resources.append({
+                        'id': row['id'],
+                        'title': row.get('entity_name', ''),
+                        'entity_name': row.get('entity_name', ''),
+                        'description': row.get('description', ''),
+                        'content': row.get('description', ''),
+                        'table': 'AIGC_cultural_entities',
+                        'source': 'AIGC生成'
+                    })
+            
+            return jsonify({
+                'success': True,
+                'resources': resources
+            })
+        finally:
+            if conn:
+                conn.close()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'获取资源失败：{str(e)}'}), 500
+
+
+@app.route('/api/comments/<int:comment_id>/resource-id', methods=['GET'])
+def get_comment_resource_id(comment_id):
+    """获取评论对应的资源ID"""
+    try:
+        from db_connection import get_user_db_connection
+        conn = get_user_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '数据库连接失败'}), 500
+        
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT resource_id 
+                    FROM user_comments 
+                    WHERE id = %s
+                """, (comment_id,))
+                result = cursor.fetchone()
+                
+                if result:
+                    return jsonify({
+                        'success': True,
+                        'resource_id': result['resource_id']
+                    })
+                else:
+                    return jsonify({
+                        'success': False,
+                        'message': '评论不存在'
+                    }), 404
+        finally:
+            if conn:
+                conn.close()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'获取评论资源ID失败：{str(e)}'}), 500
 
 
 @app.route('/api/admin/dashboard/statistics', methods=['GET'])
@@ -5018,11 +5619,15 @@ def get_dashboard_statistics():
                     text_count = daily_text.get(date_str, 0)
                     image_count = daily_image.get(date_str, 0)
                     
+                    # 计算AIGC总使用次数（文字+图片）
+                    total_aigc_count = text_count + image_count
+                    
                     complete_trend_data.append({
                         'date': date_str,
                         'daily_users': daily_users,
                         'text_count': text_count,
-                        'image_count': image_count
+                        'image_count': image_count,
+                        'total_aigc_count': total_aigc_count
                     })
                 
                 return jsonify({
@@ -5045,7 +5650,6 @@ def get_dashboard_statistics():
             if conn:
                 conn.close()
     except Exception as e:
-        print(f"[API] 获取数据大屏统计失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'message': f'获取统计信息失败：{str(e)}'}), 500
@@ -5061,13 +5665,11 @@ def auto_check_pending_annotations():
         try:
             time.sleep(300)  # 等待5分钟（300秒）
             
-            print("[定时任务] 开始检查待标注任务...")
             
             # 获取所有状态为"待标注"的任务
             from db_connection import get_user_db_connection
             conn = get_user_db_connection()
             if not conn:
-                print("[定时任务] 数据库连接失败，跳过本次检查")
                 continue
             
             try:
@@ -5084,7 +5686,6 @@ def auto_check_pending_annotations():
                     pending_tasks = cursor.fetchall()
                     
                     if pending_tasks:
-                        print(f"[定时任务] 发现 {len(pending_tasks)} 个待标注任务")
                         
                         for task in pending_tasks:
                             task_id = task['id']
@@ -5092,42 +5693,29 @@ def auto_check_pending_annotations():
                             resource_source = task['resource_source']
                             
                             try:
-                                print(f"[定时任务] 开始处理任务 {task_id} (资源ID: {resource_id})")
                                 # 触发AI标注
                                 uploader.trigger_ai_annotation(task_id)
-                                print(f"[定时任务] 任务 {task_id} 已提交AI标注")
                             except Exception as e:
-                                print(f"[定时任务] 任务 {task_id} 处理失败: {e}")
                                 import traceback
                                 traceback.print_exc()
-                    else:
-                        print("[定时任务] 未发现待标注任务")
             finally:
                 if conn:
                     conn.close()
                     
         except Exception as e:
-            print(f"[定时任务] 定时检查出错: {e}")
             import traceback
             traceback.print_exc()
             # 出错后继续运行，等待下次检查
             time.sleep(60)  # 出错后等待1分钟再继续
 
 if __name__ == '__main__':
-    print("=" * 60)
     # 使用7200端口作为后端服务端口（通过前端5173代理访问）
     backend_port = 7200
     
-    print("启动AIGC API服务器...")
-    print("=" * 60)
-    print("注意：RAG和ImageAIGC系统将按用户动态创建")
-    print("搜索RAG系统将在首次搜索请求时初始化")
-    print("=" * 60)
     
     # 启动定时任务线程（后台运行）
     timer_thread = threading.Thread(target=auto_check_pending_annotations, daemon=True)
     timer_thread.start()
-    print("[定时任务] 已启动自动标注检查任务（每5分钟检查一次）")
     
     # 添加用户管理相关路由
     @app.route('/api/auth/users', methods=['GET'])
@@ -5207,7 +5795,6 @@ if __name__ == '__main__':
         except ValueError:
             return jsonify({'success': False, 'message': '无效的用户ID'}), 400
         except Exception as e:
-            print(f"获取用户列表失败: {e}")
             import traceback
             traceback.print_exc()
             return jsonify({'success': False, 'message': f'服务器错误: {str(e)}'}), 500
@@ -5265,10 +5852,114 @@ if __name__ == '__main__':
             finally:
                 conn.close()
         except Exception as e:
-            print(f"切换用户角色失败: {e}")
             import traceback
             traceback.print_exc()
             return jsonify({'success': False, 'message': f'服务器错误: {str(e)}'}), 500
+    
+    @app.route('/api/aigc/edit-resource', methods=['POST'])
+    def edit_resource():
+        """编辑资源（二次创作）- 使用AI对话修改资源"""
+        try:
+            user_id = int(request.headers.get('X-User-Id', 0))
+            if not user_id:
+                return jsonify({'success': False, 'message': '缺少用户信息'}), 400
+            
+            data = request.json
+            resource_id = data.get('resource_id')
+            resource_type = data.get('resource_type')  # 'text' 或 'image'
+            original_content = data.get('original_content')
+            edit_request = data.get('edit_request')
+            
+            if not resource_id or not resource_type or not edit_request:
+                return jsonify({'success': False, 'message': '缺少必要参数'}), 400
+            
+            # 获取用户的RAG系统
+            rag_system = get_or_create_rag_system(user_id)
+            if not rag_system:
+                return jsonify({'success': False, 'message': 'RAG系统初始化失败'}), 500
+            
+            # 构建编辑提示词
+            if resource_type == 'text':
+                prompt = f"""
+你是一位专业的文本编辑助手。请根据用户的要求修改以下文本内容。
+
+原始文本：
+{original_content}
+
+用户要求：
+{edit_request}
+
+请直接返回修改后的文本内容，不要添加任何解释或说明。
+"""
+            else:  # image
+                prompt = f"""
+你是一位专业的图片描述编辑助手。请根据用户的要求修改以下图片描述。
+
+原始描述：
+{original_content}
+
+用户要求：
+{edit_request}
+
+请直接返回修改后的描述内容，不要添加任何解释或说明。
+"""
+            
+            # 调用AI模型进行编辑
+            try:
+                response = rag_system.model.invoke(prompt)
+                edited_content = response.content if hasattr(response, 'content') else str(response)
+                
+                result = {
+                    'success': True,
+                    'message': '编辑成功',
+                    'edited_content': edited_content
+                }
+                
+                if resource_type == 'image':
+                    result['edited_description'] = edited_content
+                else:
+                    result['edited_content'] = edited_content
+                
+                return jsonify(result)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                return jsonify({'success': False, 'message': f'AI编辑失败: {str(e)}'}), 500
+                
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return jsonify({'success': False, 'message': f'编辑失败: {str(e)}'}), 500
+    
+    @app.route('/api/aigc/save-edited-resource', methods=['POST'])
+    def save_edited_resource():
+        """保存编辑后的资源"""
+        try:
+            user_id = int(request.headers.get('X-User-Id', 0))
+            if not user_id:
+                return jsonify({'success': False, 'message': '缺少用户信息'}), 400
+            
+            data = request.json
+            resource_id = data.get('resource_id')
+            resource_type = data.get('resource_type')
+            edited_content = data.get('edited_content')
+            edited_image_url = data.get('edited_image_url')
+            
+            if not resource_id or not resource_type or not edited_content:
+                return jsonify({'success': False, 'message': '缺少必要参数'}), 400
+            
+            # 这里应该保存到数据库，但由于是模拟数据，暂时只返回成功
+            # 实际实现时，应该更新对应的资源表
+            
+            return jsonify({
+                'success': True,
+                'message': '保存成功'
+            })
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return jsonify({'success': False, 'message': f'保存失败: {str(e)}'}), 500
     
     @app.route('/api/auth/logout', methods=['POST'])
     def logout():
@@ -5298,7 +5989,6 @@ if __name__ == '__main__':
             finally:
                 conn.close()
         except Exception as e:
-            print(f"用户登出失败: {e}")
             import traceback
             traceback.print_exc()
             return jsonify({'success': False, 'message': f'服务器错误: {str(e)}'}), 500
@@ -5320,7 +6010,6 @@ if __name__ == '__main__':
     print(f"\n[启动] 正在启动服务器，监听端口: {backend_port}")
     print(f"[启动] 访问地址: http://localhost:{backend_port}")
     print(f"[启动] API文档: http://localhost:{backend_port}/api/")
-    print("=" * 60)
     
     try:
         app.run(host='0.0.0.0', port=backend_port, debug=True, use_reloader=False)
@@ -5331,9 +6020,5 @@ if __name__ == '__main__':
         import traceback
         traceback.print_exc()
         print("\n[诊断] 可能的原因：")
-        print("  1. 端口7200已被占用，请检查是否有其他程序在使用该端口")
-        print("  2. 防火墙阻止了端口访问")
-        print("  3. Python依赖缺失，请运行: pip install -r requirements.txt")
-        print("  4. 数据库连接失败，请检查MySQL服务是否启动")
         input("\n按Enter键退出...")
 

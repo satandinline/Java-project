@@ -41,12 +41,16 @@ VOLC_SEEDREAM_API_KEY = os.getenv("VOLC_SEEDREAM_API_KEY")
 # 导入统一的数据库连接模块（从父目录）
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 使用相对路径添加项目根目录到sys.path
+current_file_dir = os.path.dirname(os.path.realpath(__file__))
+project_root = os.path.dirname(current_file_dir)
+sys.path.insert(0, project_root)
 from db_connection import get_user_db_config, get_user_db_connection
 from festival_name_utils import chinese_to_english_festival, extract_and_convert_festival_name
+from rag_base import RAGBase
 
 
-class CulturalResourceRAG:
+class CulturalResourceRAG(RAGBase):
     """
     传统节日文化资源RAG系统
     支持从数据库和网页检索传统节日相关信息，生成高质量回答
@@ -59,43 +63,15 @@ class CulturalResourceRAG:
         print("正在初始化 RAG 系统")
         self.model = model
 
-        try:
-            from langchain_community.embeddings import DashScopeEmbeddings
-            self.embedding_model = DashScopeEmbeddings(
-                dashscope_api_key=ALIYUN_API_KEY,
-                model="text-embedding-v2"
-            )
-        except Exception as e:
-            print(f"DashScopeEmbeddings 初始化失败: {e}，使用 OpenAIEmbeddings 作为备选。")
-            self.embedding_model = OpenAIEmbeddings()
-
-        self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-
-        self.vector_store = Chroma(persist_directory=persist_directory, embedding_function=self.embedding_model)
-        self._persist_directory = persist_directory
-
-        try:
-            self.retriever = self.vector_store.as_retriever(search_kwargs={"k": 5})
-            print("检索器初始化成功")
-        except Exception as e:
-            print(f"创建 retriever 出错: {e}")
-            self.retriever = None
-
-        self.database_name = database_name
-        self.retrieval_tables = retrieval_tables or ["cultural_resources", "cultural_entities", 
+        # 初始化基础RAG组件（继承自RAGBase）
+        retrieval_tables = retrieval_tables or ["cultural_resources", "cultural_entities", 
                                                       "entity_relationships", "AIGC_cultural_resources",
                                                       "AIGC_graph", "crawled_images", "cultural_resources_from_user"]
+        super().__init__(persist_directory, database_name, retrieval_tables, db_config)
         
-        # 多轮对话支持：存储对话历史
-        self.conversation_history: List[Dict] = []
-        
-        if db_config:
-            self.db_config = db_config
-        else:
-            # 使用统一的数据库配置（从login.py获取用户配置）
+        # 如果db_config未提供，使用统一的数据库配置
+        if not self.db_config:
             self.db_config = get_user_db_config()
-        
-        self.db_connection = None
 
         # 自反思与性能记录存储
         self.reflection_history = []
@@ -272,320 +248,9 @@ class CulturalResourceRAG:
             print(f"[RAG] 错误堆栈: {traceback.format_exc()}")
             raise
 
-    def _call_retriever(self, query: str) -> List[Document]:
-        """
-        从向量库检索相关文档
-        :param query: 查询关键词
-        :return: 检索到的文档列表
-        """
-        if not self.retriever:
-            return []
-        try:
-            if hasattr(self.retriever, "invoke"):
-                # 直接传入字符串查询（Chroma检索器要求）
-                docs = self.retriever.invoke(query)
-                if isinstance(docs, list):
-                    return docs
-                return list(docs)
-            if hasattr(self.retriever, "get_relevant_documents") and callable(self.retriever.get_relevant_documents):
-                return self.retriever.get_relevant_documents(query)
-            if callable(self.retriever):
-                return self.retriever(query)
-        except Exception as e:
-            print(f"检索器调用错误: {e}")
-        return []
+    # _call_retriever, _get_db_connection 方法已继承自 RAGBase，无需重复定义
 
-    def _get_db_connection(self, user_id: Optional[int] = None):
-        """获取数据库连接（使用用户账户）"""
-        try:
-            # 如果提供了user_id，使用该用户的数据库配置
-            if user_id is not None:
-                conn = get_user_db_connection(user_id)
-            else:
-                # 使用当前db_config中的配置
-                conn = get_user_db_connection()
-            
-            if conn is None:
-                # 如果获取失败，尝试使用self.db_config通过db_connection创建连接
-                # 确保db_config已更新到db_connection
-                if hasattr(self, 'db_config') and self.db_config:
-                    # 使用db_connection的统一函数，它会自动使用环境变量或默认配置
-                    conn = get_user_db_connection()
-                    if conn is None:
-                        raise Exception(f"无法连接到数据库，请检查数据库配置。配置信息: host={self.db_config.get('host')}, database={self.db_config.get('database')}")
-                else:
-                    raise Exception("数据库配置未初始化")
-            
-            self.db_connection = conn
-            return self.db_connection
-        except Exception as e:
-            print(f"数据库连接失败: {e}")
-            return None
-
-    def query_database(self, query: str, table_names: Optional[List[str]] = None) -> List[Dict]:
-        """
-        从指定数据库表中检索相关内容
-        :param query: 检索关键词
-        :param table_names: 要查询的表名列表（默认使用初始化时的retrieval_tables）
-        :return: 检索结果列表
-        """
-        if table_names is None:
-            table_names = self.retrieval_tables
-        
-        conn = self._get_db_connection()
-        if not conn:
-            print("[RAG] 数据库连接失败，无法检索")
-            return []
-        
-        results = []
-        # 提取/截断关键词，避免整段描述导致 LIKE 失效
-        raw_q = query.strip()
-        # 简单按常见分隔符拆分，取前2~3段，最多取前30字
-        parts = []
-        for sep in ["。", "！", "？", "，", ",", ".", ";", "；", "\n"]:
-            if sep in raw_q:
-                parts = raw_q.split(sep)
-                break
-        if not parts:
-            parts = [raw_q]
-        keywords = []
-        for p in parts:
-            p = p.strip()
-            if not p:
-                continue
-            keywords.append(p[:30])  # 每段最多30字
-            if len(keywords) >= 3:
-                break
-        if not keywords:
-            keywords = [raw_q[:30]]
-        
-        
-        # 将查询词转换为英文节日名称（用于匹配title字段）
-        query_en = chinese_to_english_festival(query)
-        print(f"[RAG] 查询词：{query}，英文转换：{query_en}")
-        
-        try:
-            with conn.cursor() as cursor:
-                for table in table_names:
-                    if table == "cultural_resources":
-                        # 改进查询：同时搜索中英文，并解析JSON字段
-                        sql = """
-                            SELECT id, title, resource_type, content_feature_data, source_from, source_url
-                            FROM cultural_resources
-                            WHERE title LIKE %s 
-                               OR title LIKE %s
-                               OR content_feature_data LIKE %s
-                               OR JSON_EXTRACT(content_feature_data, '$.title') LIKE %s
-                               OR JSON_EXTRACT(content_feature_data, '$.text') LIKE %s
-                               OR JSON_EXTRACT(content_feature_data, '$.meta.festival_names') LIKE %s
-                            LIMIT 20
-                        """
-                        pattern_cn = f"%{query}%"
-                        pattern_en = f"%{query_en}%"
-                        cursor.execute(sql, (pattern_cn, pattern_en, pattern_cn, pattern_cn, pattern_cn, pattern_cn))
-                        rows = cursor.fetchall()
-                        for row in rows:
-                            # 解析content_feature_data JSON字段
-                            content_text = ""
-                            try:
-                                content_data = json.loads(row.get("content_feature_data", "{}"))
-                                if isinstance(content_data, dict):
-                                    content_text = content_data.get("text", "") or content_data.get("title", "")
-                                else:
-                                    content_text = str(content_data)
-                            except:
-                                content_text = str(row.get("content_feature_data", ""))
-                            
-                            results.append({
-                                "table": "cultural_resources",
-                                "id": row.get("id"),
-                                "title": row.get("title", ""),
-                                "content": content_text[:2000] if content_text else "",
-                                "source": row.get("source_from", ""),
-                                "url": row.get("source_url", "")
-                            })
-                    
-                    elif table == "cultural_entities":
-                        sql = """
-                            SELECT id, entity_name, entity_type, description, source, 
-                                   period_era, geo_coordinates, cultural_region, 
-                                   style_features, cultural_value, related_images_url, digital_resource_link
-                            FROM cultural_entities
-                            WHERE entity_name LIKE %s 
-                               OR description LIKE %s 
-                               OR entity_type LIKE %s
-                               OR source LIKE %s
-                               OR period_era LIKE %s
-                               OR cultural_region LIKE %s
-                               OR style_features LIKE %s
-                               OR cultural_value LIKE %s
-                            LIMIT 20
-                        """
-                        pattern = f"%{query}%"
-                        cursor.execute(sql, (pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern))
-                        rows = cursor.fetchall()
-                        for row in rows:
-                            content_parts = []
-                            if row.get("description"):
-                                content_parts.append(f"描述：{row.get('description')}")
-                            if row.get("cultural_value"):
-                                content_parts.append(f"文化价值：{row.get('cultural_value')}")
-                            if row.get("period_era"):
-                                content_parts.append(f"时期：{row.get('period_era')}")
-                            if row.get("cultural_region"):
-                                content_parts.append(f"文化区域：{row.get('cultural_region')}")
-                            if row.get("style_features"):
-                                content_parts.append(f"风格特征：{row.get('style_features')}")
-                            if row.get("geo_coordinates"):
-                                content_parts.append(f"地理坐标：{row.get('geo_coordinates')}")
-                            
-                            results.append({
-                                "table": "cultural_entities",
-                                "id": row.get("id"),
-                                "title": row.get("entity_name", ""),
-                                "content": "；".join(content_parts) if content_parts else "",
-                                "source": row.get("source", ""),
-                                "entity_type": row.get("entity_type", "")
-                            })
-                    
-                    elif table == "entity_relationships":
-                        sql = """
-                            SELECT er.id, er.relationship_type, er.relationship_evidence,
-                                   ce1.entity_name as source_entity, ce2.entity_name as target_entity
-                            FROM entity_relationships er
-                            JOIN cultural_entities ce1 ON er.source_entity_id = ce1.id
-                            JOIN cultural_entities ce2 ON er.target_entity_id = ce2.id
-                            WHERE ce1.entity_name LIKE %s OR ce2.entity_name LIKE %s 
-                                  OR er.relationship_type LIKE %s
-                            LIMIT 10
-                        """
-                        pattern = f"%{query}%"
-                        cursor.execute(sql, (pattern, pattern, pattern))
-                        rows = cursor.fetchall()
-                        for row in rows:
-                            results.append({
-                                "table": "entity_relationships",
-                                "id": row.get("id"),
-                                "title": f"{row.get('source_entity')} - {row.get('relationship_type')} - {row.get('target_entity')}",
-                                "content": row.get("relationship_evidence", ""),
-                                "source": "",
-                                "relationship_type": row.get("relationship_type", "")
-                            })
-                    
-                    elif table == "AIGC_cultural_resources":
-                        # 改进查询：同时搜索中英文，并解析JSON字段
-                        sql = """
-                            SELECT id, title, resource_type, content_feature_data, source_from
-                            FROM AIGC_cultural_resources
-                            WHERE title LIKE %s 
-                               OR title LIKE %s
-                               OR content_feature_data LIKE %s
-                               OR JSON_EXTRACT(content_feature_data, '$.title') LIKE %s
-                               OR JSON_EXTRACT(content_feature_data, '$.text') LIKE %s
-                               OR JSON_EXTRACT(content_feature_data, '$.meta.festival_names') LIKE %s
-                            LIMIT 20
-                        """
-                        pattern_cn = f"%{query}%"
-                        pattern_en = f"%{query_en}%"
-                        cursor.execute(sql, (pattern_cn, pattern_en, pattern_cn, pattern_cn, pattern_cn, pattern_cn))
-                        rows = cursor.fetchall()
-                        for row in rows:
-                            # 解析content_feature_data JSON字段
-                            content_text = ""
-                            try:
-                                content_data = json.loads(row.get("content_feature_data", "{}"))
-                                if isinstance(content_data, dict):
-                                    content_text = content_data.get("text", "") or content_data.get("title", "")
-                                else:
-                                    content_text = str(content_data)
-                            except:
-                                content_text = str(row.get("content_feature_data", ""))
-                            
-                            results.append({
-                                "table": "AIGC_cultural_resources",
-                                "id": row.get("id"),
-                                "title": row.get("title", ""),
-                                "content": content_text[:2000] if content_text else "",
-                                "source": row.get("source_from", ""),
-                                "url": ""
-                            })
-                    
-                    elif table == "AIGC_graph":
-                        sql = """
-                            SELECT id, file_name, storage_path, dimensions, tags
-                            FROM AIGC_graph
-                            WHERE file_name LIKE %s OR JSON_SEARCH(tags, 'one', %s) IS NOT NULL
-                            LIMIT 10
-                        """
-                        pattern = f"%{query}%"
-                        cursor.execute(sql, (pattern, pattern))
-                        rows = cursor.fetchall()
-                        for row in rows:
-                            storage_path = row.get("storage_path", "")
-                            # 构建完整路径：项目根目录的AIGC_graph文件夹 + storage_path
-                            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                            full_path = os.path.join(base_dir, "AIGC_graph", storage_path) if storage_path else ""
-                            results.append({
-                                "table": "AIGC_graph",
-                                "id": row.get("id"),
-                                "title": row.get("file_name", ""),
-                                "content": f"图片路径：{full_path}，尺寸：{row.get('dimensions', '未知')}",
-                                "source": "AIGC生成",
-                                "url": full_path,
-                                "image_path": full_path
-                            })
-                    
-                    elif table == "crawled_images":
-                        sql = """
-                            SELECT ci.id, ci.file_name, ci.storage_path, ci.dimensions, ci.tags,
-                                   ci.resource_id, ci.entity_id, ci.festival_name,
-                                   cr.title as resource_title, ce.entity_name
-                            FROM crawled_images ci
-                            LEFT JOIN cultural_resources cr ON ci.resource_id = cr.id
-                            LEFT JOIN cultural_entities ce ON ci.entity_id = ce.id
-                            WHERE ci.file_name LIKE %s 
-                               OR JSON_SEARCH(ci.tags, 'one', %s) IS NOT NULL
-                               OR ci.festival_name LIKE %s
-                               OR cr.title LIKE %s
-                               OR ce.entity_name LIKE %s
-                            LIMIT 20
-                        """
-                        pattern = f"%{query}%"
-                        cursor.execute(sql, (pattern, pattern, pattern, pattern, pattern))
-                        rows = cursor.fetchall()
-                        for row in rows:
-                            storage_path = row.get("storage_path", "")
-                            # 构建完整路径：项目根目录的crawled_images文件夹 + storage_path
-                            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                            full_path = os.path.join(base_dir, "crawled_images", storage_path) if storage_path else ""
-                            # 如果storage_path已经是完整路径，直接使用
-                            if not os.path.exists(full_path) and storage_path:
-                                # 尝试直接使用storage_path
-                                if os.path.exists(storage_path):
-                                    full_path = storage_path
-                                else:
-                                    # 尝试从项目根目录查找
-                                    full_path = os.path.join(base_dir, storage_path)
-                            
-                            results.append({
-                                "table": "crawled_images",
-                                "id": row.get("id"),
-                                "title": row.get("file_name", ""),
-                                "content": f"图片路径：{full_path}，尺寸：{row.get('dimensions', '未知')}，关联资源：{row.get('resource_title', '')}，关联实体：{row.get('entity_name', '')}",
-                                "source": "爬虫抓取",
-                                "url": full_path,
-                                "image_path": full_path,
-                                "resource_id": row.get("resource_id"),
-                                "entity_id": row.get("entity_id")
-                            })
-        
-        except Exception as e:
-            import traceback
-            print(f"[RAG] 数据库查询错误: {e}")
-            print(f"[RAG] 查询错误堆栈: {traceback.format_exc()}")
-        
-        print(f"[RAG] query_database返回 {len(results)} 条结果")
-        return results
+    # query_database方法已迁移到rag_base.py，通过继承使用统一实现
 
     def ingest_data(self, documents: List[Document]):
         """
@@ -683,7 +348,8 @@ class CulturalResourceRAG:
                                         "role": "user",
                                         "content": [
                                             {"type": "text", "text": "请详细描述这张图片的内容，特别是与传统节日、文化相关的元素。"},
-                                            {"type": "image_url", "image_url": {"url": f"file://{os.path.abspath(image_path)}"}}
+                                            # 对于file:// URL，需要规范化路径（使用realpath而不是abspath）
+                                            {"type": "image_url", "image_url": {"url": f"file://{os.path.realpath(image_path) if os.path.exists(image_path) else image_path}"}}
                                         ]
                                     }
                                 ],
@@ -698,9 +364,7 @@ class CulturalResourceRAG:
             print(f"读取图片信息出错: {e}")
             return None
     
-    def clear_conversation_history(self):
-        """清空对话历史"""
-        self.conversation_history = []
+    # clear_conversation_history 方法已继承自 RAGBase，无需重复定义
     
     def ask(self, query: str, image_paths: Optional[List[str]] = None, 
             session_id: Optional[int] = None, use_history: bool = True) -> Dict:
@@ -939,64 +603,7 @@ class CulturalResourceRAG:
         
         return result
 
-    def _crawl_web_content(self, query: str, max_results: int = 3) -> List[Document]:
-        """
-        当数据库中没有相关信息时，从网页获取传统节日相关内容
-        :param query: 查询关键词
-        :param max_results: 最多获取的结果数
-        :return: 文档列表
-        """
-        documents = []
-        search_query = f"{query} 传统节日"
-        
-        search_urls = [
-            f"https://www.baidu.com/s?wd={urllib.parse.quote(search_query)}",
-            f"https://www.sogou.com/web?query={urllib.parse.quote(search_query)}"
-        ]
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
-        
-        for url in search_urls[:1]:
-            try:
-                response = requests.get(url, headers=headers, timeout=10)
-                if response.status_code == 200:
-                    soup = BeautifulSoup(response.text, "html.parser")
-                    
-                    links = []
-                    for a_tag in soup.find_all("a", href=True)[:max_results * 2]:
-                        href = a_tag.get("href", "")
-                        if href and isinstance(href, str) and href.startswith("http"):
-                            if any(domain in href for domain in 
-                                ["baike.baidu.com", "zh.wikipedia.org", "baike.com", "sohu.com", "sina.com.cn"]):
-                                links.append(href)
-                    
-                    for link in links[:max_results]:
-                        try:
-                            time.sleep(1)
-                            page_response = requests.get(link, headers=headers, timeout=10)
-                            if page_response.status_code == 200:
-                                page_soup = BeautifulSoup(page_response.text, "html.parser")
-                                
-                                for script in page_soup(["script", "style"]):
-                                    script.decompose()
-                                
-                                text_content = page_soup.get_text()
-                                text_content = re.sub(r'\s+', ' ', text_content).strip()
-                                
-                                if len(text_content) > 200:
-                                    doc = Document(
-                                        page_content=text_content[:5000],
-                                        metadata={"source": link, "title": page_soup.title.string if page_soup.title else ""}
-                                    )
-                                    documents.append(doc)
-                        except Exception as e:
-                            continue
-            except Exception as e:
-                continue
-        
-        return documents
+    # _crawl_web_content 方法已继承自 RAGBase，无需重复定义
 
     def _get_additional_context(self, query: str, reflection_result: Dict) -> str:
         """

@@ -153,19 +153,8 @@ const updateDateTime = () => {
   currentTime.value = `${hours}:${minutes}:${seconds}`;
 };
 
-// 获取当前登录用户信息
-const getCurrentUser = () => {
-  const userInfoStr = localStorage.getItem('userInfo');
-  if (userInfoStr) {
-    try {
-      return JSON.parse(userInfoStr);
-    } catch (e) {
-      console.error('解析用户信息失败:', e);
-      return null;
-    }
-  }
-  return null;
-};
+// 导入统一的getCurrentUser函数
+import { getCurrentUser } from '../utils/api.js';
 
 // 加载统计数据
 const loadStatistics = async () => {
@@ -182,7 +171,11 @@ const loadStatistics = async () => {
     // 注意：前端只做基本检查，真正的权限验证在API后端（从数据库users表读取role字段）
     // 如果前端role字段不存在或不正确，后端会返回403错误
 
-    const response = await fetch(`/api/statistics?userId=${userInfo.id}`);
+    const response = await fetch(`/api/admin/dashboard/statistics?user_id=${userInfo.id}`, {
+      headers: {
+        'X-User-ID': userInfo.id.toString()
+      }
+    });
     
     if (!response.ok) {
       if (response.status === 403) {
@@ -196,15 +189,21 @@ const loadStatistics = async () => {
     
     const data = await response.json();
     
-    if (data.success) {
-      statistics.value = data.data;
-      console.log('统计数据加载成功:', statistics.value);
+    // 检查返回的数据结构
+    if (data.success !== false) {
+      // 如果返回的是直接的数据对象（不是包装在data字段中）
+      if (data.total_users !== undefined) {
+        statistics.value = data;
+      } else if (data.data) {
+        statistics.value = data.data;
+      } else {
+        statistics.value = data;
+      }
       // 等待DOM更新后绘制图表（通过watch自动触发）
     } else {
       error.value = data.message || '获取统计数据失败';
     }
   } catch (err) {
-    console.error('获取统计数据失败:', err);
     error.value = `加载失败：${err.message || '未知错误'}`;
   } finally {
     isLoading.value = false;
@@ -214,10 +213,6 @@ const loadStatistics = async () => {
 // 绘制所有趋势图表（带重试机制）
 const drawAllCharts = (retryCount = 0, maxRetries = 5) => {
   if (!statistics.value || !statistics.value.trend_data) {
-    console.log('图表绘制条件不满足:', {
-      hasStatistics: !!statistics.value,
-      hasTrendData: !!(statistics.value && statistics.value.trend_data)
-    });
     return;
   }
 
@@ -231,13 +226,11 @@ const drawAllCharts = (retryCount = 0, maxRetries = 5) => {
   if (missingCanvas.length > 0) {
     if (retryCount < maxRetries) {
       const delay = Math.min(200 * (retryCount + 1), 1000); // 递增延迟，最多1秒
-      console.warn(`部分canvas未找到，跳过绘制: ${missingCanvas.join(', ')} (重试 ${retryCount + 1}/${maxRetries})`);
       setTimeout(() => {
         drawAllCharts(retryCount + 1, maxRetries);
       }, delay);
       return;
     } else {
-      console.error('Canvas元素始终未找到，请检查DOM结构:', missingCanvas);
       return;
     }
   }
@@ -253,28 +246,8 @@ const drawAllCharts = (retryCount = 0, maxRetries = 5) => {
     return a.date.localeCompare(b.date);
   });
   
-  // 调试输出
-  console.log('趋势数据（后端返回，排序后）:', trendData.map(d => ({ 
-    date: d.date, 
-    daily_users: d.daily_users, 
-    text_count: d.text_count,
-    image_count: d.image_count
-  })));
-  
   // 验证数据完整性：确保有7条数据
   const requiredDays = 7;
-  if (trendData.length !== requiredDays) {
-    console.warn(`趋势数据条数不正确：期望${requiredDays}条，实际${trendData.length}条`);
-  }
-  
-  // 验证最后一天是否是今天（使用后端返回的日期作为标准，因为后端使用数据库CURDATE()更准确）
-  // 注意：前端计算的日期可能有时区问题，所以信任后端返回的日期
-  if (trendData.length > 0) {
-    const lastDate = trendData[trendData.length - 1].date;
-    // 后端返回的最后一天应该是数据库的今天（CURDATE()），这是准确的
-    // 不再进行前端日期比较，避免时区问题
-    console.log(`趋势数据最后一天：${lastDate}（由数据库CURDATE()确定）`);
-  }
 
   // 绘制四个独立的图表
   drawSingleChart(usersChart.value, trendData, 'daily_users', '#409eff', '访问人次');
@@ -286,7 +259,6 @@ const drawAllCharts = (retryCount = 0, maxRetries = 5) => {
 // 绘制单个趋势图表
 const drawSingleChart = (canvas, trendData, dataKey, color, label) => {
   if (!canvas) {
-    console.error(`无法找到画布: ${label}`);
     return;
   }
 
@@ -295,7 +267,6 @@ const drawSingleChart = (canvas, trendData, dataKey, color, label) => {
   // 设置画布尺寸
   const container = canvas.parentElement;
   if (!container) {
-    console.error('无法找到画布容器');
     return;
   }
   canvas.width = container.clientWidth || 800;

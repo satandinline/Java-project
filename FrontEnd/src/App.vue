@@ -32,6 +32,33 @@
             👥 用户管理
           </router-link>
           
+          <!-- 消息通知铃铛图标 -->
+          <div class="notification-bell" @click="showNotificationList = !showNotificationList" v-if="isLoggedIn">
+            <span class="bell-icon">🔔</span>
+            <span v-if="unreadCount > 0" class="notification-badge">{{ unreadCount > 99 ? '99+' : unreadCount }}</span>
+          </div>
+          
+          <!-- 通知列表下拉菜单 -->
+          <div v-if="showNotificationList && isLoggedIn" class="notification-dropdown">
+            <div class="notification-header">
+              <span>消息通知</span>
+              <button @click="markAllAsRead" class="mark-all-read-btn" v-if="unreadCount > 0">全部已读</button>
+            </div>
+            <div class="notification-list">
+              <div v-if="notifications.length === 0" class="no-notifications">暂无通知</div>
+              <div 
+                v-for="notif in notifications" 
+                :key="notif.id"
+                class="notification-item"
+                :class="{ unread: !notif.is_read }"
+                @click="handleNotificationClick(notif)"
+              >
+                <div class="notification-content">{{ notif.content }}</div>
+                <div class="notification-time">{{ formatNotificationTime(notif.created_at) }}</div>
+              </div>
+            </div>
+          </div>
+          
           <!-- 用户头像和昵称 -->
           <div class="user-profile">
             <div class="user-profile-content">
@@ -437,8 +464,105 @@ const newSignature = ref('');
 const changeSignatureError = ref('');
 const changeSignatureSuccess = ref('');
 
+// 消息通知相关
+const showNotificationList = ref(false);
+const notifications = ref([]);
+const unreadCount = ref(0);
+
+// 加载通知列表
+const loadNotifications = async () => {
+  if (!userInfo.value || !userInfo.value.id) return;
+  
+  try {
+    const response = await fetch(`/api/notifications?user_id=${userInfo.value.id}`);
+    const data = await response.json();
+    
+    if (data.success) {
+      notifications.value = data.notifications || [];
+      unreadCount.value = notifications.value.filter(n => !n.is_read).length;
+    }
+  } catch (error) {
+  }
+};
+
+// 标记全部已读
+const markAllAsRead = async () => {
+  if (!userInfo.value || !userInfo.value.id) return;
+  
+  try {
+    const response = await fetch('/api/notifications/mark-all-read', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': userInfo.value.id.toString()
+      }
+    });
+    
+    const data = await response.json();
+    if (data.success) {
+      unreadCount.value = 0;
+      notifications.value.forEach(n => n.is_read = 1);
+    }
+  } catch (error) {
+  }
+};
+
+// 处理通知点击
+const handleNotificationClick = async (notif) => {
+  // 标记为已读
+  if (!notif.is_read) {
+    try {
+      await fetch(`/api/notifications/${notif.id}/read`, {
+        method: 'POST'
+      });
+      notif.is_read = 1;
+      unreadCount.value = Math.max(0, unreadCount.value - 1);
+    } catch (error) {
+    }
+  }
+  
+  // 跳转到资源详情并定位到评论
+  if (notif.related_id) {
+    showNotificationList.value = false;
+    // 根据通知类型跳转
+    if (notif.notification_type === 'like' || notif.notification_type === 'reply') {
+      // 需要先获取评论对应的resource_id
+      try {
+        const response = await fetch(`/api/comments/${notif.related_id}/resource-id`);
+        const data = await response.json();
+        if (data.success && data.resource_id) {
+          router.push({
+            path: '/resource/detail',
+            query: {
+              id: data.resource_id,
+              comment_id: notif.related_id
+            }
+          });
+        }
+      } catch (error) {
+      }
+    }
+  }
+};
+
+// 格式化通知时间
+const formatNotificationTime = (timeStr) => {
+  if (!timeStr) return '';
+  const date = new Date(timeStr);
+  const now = new Date();
+  const diff = now - date;
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+  
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes}分钟前`;
+  if (hours < 24) return `${hours}小时前`;
+  if (days < 7) return `${days}天前`;
+  return date.toLocaleDateString('zh-CN');
+};
+
 onMounted(() => {
-  console.log('App.vue mounted');
   // 从sessionStorage读取用户信息（sessionStorage在刷新后会清空，需要重新登录）
   // 注意：路由守卫已经处理了登录跳转，这里只负责更新组件状态，不进行路由跳转
   const savedUser = sessionStorage.getItem('userInfo');
@@ -447,22 +571,22 @@ onMounted(() => {
       const parsedUser = JSON.parse(savedUser);
       // 验证用户信息是否有效（检查必要字段）
       if (!parsedUser || !parsedUser.id || !parsedUser.account) {
-        console.log('sessionStorage中的用户信息无效，已清除');
         sessionStorage.removeItem('userInfo');
         userInfo.value = null;
         // 路由守卫会处理跳转，这里不需要手动跳转
         return;
       }
       userInfo.value = parsedUser;
-      console.log('用户信息已加载:', userInfo.value);
+      // 加载通知列表
+      loadNotifications();
+      // 每30秒刷新一次通知
+      setInterval(loadNotifications, 30000);
     } catch (e) {
-      console.error('解析用户信息失败:', e);
       sessionStorage.removeItem('userInfo');
       userInfo.value = null;
       // 路由守卫会处理跳转，这里不需要手动跳转
     }
   } else {
-    console.log('未找到用户信息');
     userInfo.value = null;
     // 路由守卫会处理跳转，这里不需要手动跳转
   }
@@ -479,7 +603,7 @@ const isSuperAdmin = computed(() => {
   return userInfo.value && userInfo.value.role === '超级管理员';
 });
 
-// 监听路由变化
+  // 监听路由变化
 router.afterEach(() => {
   // 从sessionStorage读取用户信息
   const savedUser = sessionStorage.getItem('userInfo');
@@ -488,11 +612,12 @@ router.afterEach(() => {
       const parsedUser = JSON.parse(savedUser);
       if (parsedUser && parsedUser.id && parsedUser.account) {
         userInfo.value = parsedUser;
+        // 加载通知列表
+        loadNotifications();
       } else {
         userInfo.value = null;
       }
     } catch (e) {
-      console.error('解析用户信息失败:', e);
       userInfo.value = null;
     }
   } else {
@@ -520,6 +645,8 @@ const handleLoginSuccess = (userData) => {
     }
     // 保存到sessionStorage（Login.vue中已经保存，这里再次确认）
     sessionStorage.setItem('userInfo', JSON.stringify(userInfo.value));
+    // 加载通知列表
+    loadNotifications();
     router.push('/');
   }
 };
@@ -713,7 +840,6 @@ const uploadCroppedAvatar = async (croppedFile) => {
       changeAvatarError.value = result.message || '头像更换失败';
     }
   } catch (error) {
-    console.error('更换头像失败:', error);
     changeAvatarError.value = '网络错误，请稍后重试';
   }
 };
@@ -799,7 +925,6 @@ const handleUseDefaultAvatar = async () => {
             changeAvatarError.value = result.message || '切换默认头像失败';
           }
         } catch (error) {
-          console.error('切换默认头像失败:', error);
           changeAvatarError.value = '网络错误，请稍后重试';
         }
       }, 'image/jpeg', 0.9);
@@ -809,7 +934,6 @@ const handleUseDefaultAvatar = async () => {
     };
     img.src = '/default.jpg';
   } catch (error) {
-    console.error('切换默认头像失败:', error);
     changeAvatarError.value = '网络错误，请稍后重试';
   }
 };
@@ -920,7 +1044,6 @@ const handleChangePassword = async () => {
       changePasswordError.value = result.message || '修改密码失败';
     }
   } catch (error) {
-    console.error('修改密码失败:', error);
     changePasswordError.value = '网络错误，请稍后重试';
   }
 };
@@ -946,7 +1069,6 @@ const loadSecurityQuestion = async () => {
       currentSecurityQuestion.value = '';
     }
   } catch (error) {
-    console.error('加载安全问题失败:', error);
     currentSecurityQuestion.value = '';
   }
 };
@@ -1008,7 +1130,6 @@ const handleVerifySecurityAnswer = async () => {
       securityVerifyError.value = result.message || '答案错误';
     }
   } catch (error) {
-    console.error('验证答案失败:', error);
     securityVerifyError.value = '网络错误，请稍后重试';
   }
 };
@@ -1054,7 +1175,6 @@ const handleChangeSecurityQuestion = async () => {
       changeSecurityError.value = result.message || '操作失败';
     }
   } catch (error) {
-    console.error('更换二级问题失败:', error);
     changeSecurityError.value = '网络错误，请稍后重试';
   }
 };
@@ -1107,7 +1227,6 @@ const handleChangeNickname = async () => {
       changeNicknameError.value = result.message || '修改昵称失败';
     }
   } catch (error) {
-    console.error('修改昵称失败:', error);
     changeNicknameError.value = '网络错误，请稍后重试';
   }
 };
@@ -1227,7 +1346,6 @@ const handleChangeSignature = async () => {
       changeSignatureError.value = result.message || '修改个人签名失败';
     }
   } catch (error) {
-    console.error('修改个人签名失败:', error);
     changeSignatureError.value = '网络错误，请稍后重试';
   }
 };
@@ -1270,7 +1388,6 @@ const handleConfirmDeleteAccount = async () => {
       deleteAccountError.value = result.message || '注销账号失败';
     }
   } catch (error) {
-    console.error('注销账号失败:', error);
     deleteAccountError.value = '网络错误，请稍后重试';
   }
 };
@@ -1291,7 +1408,6 @@ const handleLogout = async (skipConfirm = false) => {
           })
         });
       } catch (e) {
-        console.error('更新在线状态失败:', e);
         // 即使失败也继续登出流程
       }
     }
@@ -1869,5 +1985,110 @@ main {
 .avatar-crop-controls button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* 消息通知样式 */
+.notification-bell {
+  position: relative;
+  cursor: pointer;
+  padding: 8px 12px;
+  font-size: 20px;
+  transition: all 0.3s;
+}
+
+.notification-bell:hover {
+  background: #f5f7fa;
+  border-radius: 4px;
+}
+
+.notification-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: #f56c6c;
+  color: white;
+  border-radius: 10px;
+  padding: 2px 6px;
+  font-size: 12px;
+  min-width: 18px;
+  text-align: center;
+  line-height: 14px;
+}
+
+.notification-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 8px;
+  background: white;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  width: 360px;
+  max-height: 500px;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+}
+
+.notification-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e4e7ed;
+  font-weight: 600;
+}
+
+.mark-all-read-btn {
+  padding: 4px 12px;
+  background: #409eff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.mark-all-read-btn:hover {
+  background: #66b1ff;
+}
+
+.notification-list {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 400px;
+}
+
+.no-notifications {
+  padding: 40px;
+  text-align: center;
+  color: #999;
+}
+
+.notification-item {
+  padding: 12px 16px;
+  border-bottom: 1px solid #f0f0f0;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.notification-item:hover {
+  background: #f5f7fa;
+}
+
+.notification-item.unread {
+  background: #ecf5ff;
+}
+
+.notification-content {
+  font-size: 14px;
+  color: #333;
+  margin-bottom: 4px;
+}
+
+.notification-time {
+  font-size: 12px;
+  color: #999;
 }
 </style>

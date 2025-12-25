@@ -181,7 +181,6 @@ const handleSearch = async () => {
       alert('搜索出错: ' + (resData.msg || '未知错误'));
     }
   } catch (error) {
-    console.error('搜索请求失败:', error);
     emptyMessage.value = '抱歉，暂无数据，请稍后重试';
     alert('搜索服务连接失败，请检查后端服务是否正常运行');
   } finally {

@@ -342,7 +342,6 @@ const handleLogin = async () => {
       });
     } catch (networkError) {
       // 网络错误：后端服务器可能没有启动或无法连接
-      console.error('网络请求失败:', networkError);
       errorMessage.value = '网络错误，请检查后端服务器是否启动（端口7200）';
       isLoading.value = false;
       return;
@@ -389,8 +388,6 @@ const handleLogin = async () => {
     try {
       result = JSON.parse(responseText);
     } catch (e) {
-      console.error('JSON解析失败:', e);
-      console.error('响应内容:', responseText);
       errorMessage.value = '服务器返回了无效的JSON数据，请检查后端服务';
       isLoading.value = false;
       return;
@@ -422,9 +419,9 @@ const handleLogin = async () => {
             access_type: 'page_view',
             access_path: '/'
           })
-        }).catch(err => console.error('记录访问日志失败:', err));
+        });
       } catch (e) {
-        console.error('记录访问日志异常:', e);
+        // 忽略日志记录错误
       }
 
       // 通知 App.vue 切换页面
@@ -436,7 +433,6 @@ const handleLogin = async () => {
       errorMessage.value = result.message || '登录失败，请重试';
     }
   } catch (error) {
-    console.error('登录失败:', error);
     // 检查是否是网络错误
     if (error instanceof TypeError && (error.message.includes('fetch') || error.message.includes('Failed to fetch'))) {
       errorMessage.value = '网络错误，请检查后端服务器是否启动（端口7200）';
@@ -539,9 +535,9 @@ const handleRegister = async () => {
             access_type: 'page_view',
             access_path: '/'
           })
-        }).catch(err => console.error('记录访问日志失败:', err));
+        });
       } catch (e) {
-        console.error('记录访问日志异常:', e);
+        // 忽略日志记录错误
       }
       
       // 通知 App.vue 切换页面
@@ -555,7 +551,6 @@ const handleRegister = async () => {
       errorMessage.value = result.message || '注册失败，请重试';
     }
   } catch (error) {
-    console.error('注册失败:', error);
     errorMessage.value = '网络错误，请检查后端服务器是否启动';
   } finally {
     isLoading.value = false;
@@ -590,7 +585,6 @@ const getSecurityQuestion = async () => {
       errorMessage.value = result.message || '获取安全问题失败';
     }
   } catch (error) {
-    console.error('获取安全问题失败:', error);
     errorMessage.value = '网络错误，请检查后端服务器是否启动';
   } finally {
     isLoading.value = false;
@@ -629,7 +623,6 @@ const verifyAnswer = async () => {
         errorMessage.value = result.message || '答案错误';
       }
     } catch (error) {
-      console.error('验证答案失败:', error);
       errorMessage.value = '网络错误，请检查后端服务器是否启动';
     } finally {
       isLoading.value = false;
@@ -678,7 +671,6 @@ const verifyAnswer = async () => {
         errorMessage.value = result.message || '重置失败';
       }
     } catch (error) {
-      console.error('重置密码失败:', error);
       errorMessage.value = '网络错误，请检查后端服务器是否启动';
     } finally {
       isLoading.value = false;
@@ -729,7 +721,6 @@ const resetPassword = async () => {
       errorMessage.value = result.message || '重置密码失败';
     }
   } catch (error) {
-    console.error('重置密码失败:', error);
     errorMessage.value = '网络错误，请检查后端服务器是否启动';
   } finally {
     isLoading.value = false;

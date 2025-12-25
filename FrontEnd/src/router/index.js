@@ -9,6 +9,7 @@ import Login from '../components/Login.vue';
 import ResourceDetail from '../components/ResourceDetail.vue';
 import DashboardView from '../components/DashboardView.vue';
 import UserManagement from '../components/UserManagement.vue';
+import SecondaryCreationView from '../components/SecondaryCreationView.vue';
 
 const routes = [
   {
@@ -70,6 +71,12 @@ const routes = [
     name: 'UserManagement',
     component: UserManagement,
     meta: { requiresAuth: true, requiresSuperAdmin: true }
+  },
+  {
+    path: '/secondary-creation',
+    name: 'SecondaryCreation',
+    component: SecondaryCreationView,
+    meta: { requiresAuth: true }
   }
 ];
 
@@ -80,7 +87,6 @@ const router = createRouter({
 
 // 路由守卫：检查登录状态和权限
 router.beforeEach((to, from, next) => {
-  console.log('路由守卫:', { from: from.path, to: to.path, requiresAuth: to.meta.requiresAuth });
   // 使用sessionStorage保存当前会话的登录状态，刷新页面后会自动清空，需要重新登录
   const userInfoStr = sessionStorage.getItem('userInfo');
   let userInfo = null;
@@ -89,7 +95,6 @@ router.beforeEach((to, from, next) => {
     try {
       userInfo = JSON.parse(userInfoStr);
     } catch (e) {
-      console.error('解析用户信息失败:', e);
     }
   }
   
@@ -97,21 +102,18 @@ router.beforeEach((to, from, next) => {
   if (to.meta.requiresAuth) {
     if (!userInfo) {
       // 未登录，跳转到登录页
-      console.log('未登录，跳转到登录页');
       next('/login');
       return;
     }
     
     // 如果路由需要管理员权限
     if (to.meta.requiresAdmin && userInfo.role !== '管理员' && userInfo.role !== '超级管理员') {
-      console.log('权限不足，跳转到首页');
       next('/');
       return;
     }
     
     // 如果路由需要超级管理员权限
     if (to.meta.requiresSuperAdmin && userInfo.role !== '超级管理员') {
-      console.log('权限不足，需要超级管理员权限');
       next('/');
       return;
     }
@@ -121,14 +123,12 @@ router.beforeEach((to, from, next) => {
     // 如果访问登录页且已登录（sessionStorage中有userInfo），跳转到首页
     // 注意：sessionStorage在刷新后会清空，所以这里检查的是当前会话状态
     if (to.path === '/login' && userInfo) {
-      console.log('当前会话已登录，跳转到首页');
       next('/');
       return;
     }
   }
   
   // 允许访问
-  console.log('允许访问:', to.path);
   next();
 });
 

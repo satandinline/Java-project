@@ -1,0 +1,89 @@
+# 全功能测试脚本（curl版本）
+# 使用方法：修改BASE_URL和USER_ID后执行
+
+BASE_URL="http://localhost:7200"
+USER_ID=1
+
+echo "=========================================="
+echo "开始测试所有新功能"
+echo "=========================================="
+
+echo ""
+echo "1. 测试全文检索（不限制返回条数）"
+echo "----------------------------------------"
+curl -X GET "${BASE_URL}/api/search?q=春节" | python -m json.tool | head -20
+
+echo ""
+echo "2. 测试图文互搜（三列布局）"
+echo "----------------------------------------"
+curl -X POST "${BASE_URL}/api/multimodal/search" \
+  -H "X-User-Id: ${USER_ID}" \
+  -F "mode=text" \
+  -F "query=春节" \
+  -F "user_id=${USER_ID}" | python -m json.tool | grep -E "(vector_results|text_results|image_results)" | head -10
+
+echo ""
+echo "3. 测试AIGC文字生成（检查retrieval_id字段）"
+echo "----------------------------------------"
+# 创建会话
+SESSION_RESPONSE=$(curl -s -X POST "${BASE_URL}/api/aigc/sessions" \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: ${USER_ID}" \
+  -d '{"summary": "测试会话", "mode": "text"}')
+SESSION_ID=$(echo $SESSION_RESPONSE | python -c "import sys, json; print(json.load(sys.stdin)['session']['id'])")
+echo "会话ID: ${SESSION_ID}"
+
+# 发送AIGC请求
+curl -X POST "${BASE_URL}/api/aigc/ask" \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: ${USER_ID}" \
+  -d "{
+    \"query\": \"请介绍一下春节的习俗\",
+    \"session_id\": ${SESSION_ID},
+    \"mode\": \"text\"
+  }" | python -m json.tool | head -30
+
+echo ""
+echo "检查qa_messages表的retrieval_id字段："
+echo "SELECT retrieval_id FROM qa_messages WHERE session_id = ${SESSION_ID} ORDER BY id DESC LIMIT 1;"
+
+echo ""
+echo "4. 测试评论点赞通知"
+echo "----------------------------------------"
+# 创建评论
+COMMENT_RESPONSE=$(curl -s -X POST "${BASE_URL}/api/comments" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"resource_id\": 1,
+    \"user_id\": ${USER_ID},
+    \"comment_content\": \"测试评论\"
+  }")
+COMMENT_ID=$(echo $COMMENT_RESPONSE | python -c "import sys, json; print(json.load(sys.stdin)['comment']['id'])")
+echo "评论ID: ${COMMENT_ID}"
+
+# 使用另一个用户点赞（需要先创建另一个用户，这里假设USER_ID=2存在）
+LIKE_USER_ID=2
+curl -X POST "${BASE_URL}/api/comments/${COMMENT_ID}/like" \
+  -H "Content-Type: application/json" \
+  -d "{\"user_id\": ${LIKE_USER_ID}}"
+
+echo ""
+echo "检查通知："
+curl -X GET "${BASE_URL}/api/notifications?user_id=${USER_ID}" | python -m json.tool | grep -A 5 "like"
+
+echo ""
+echo "5. 测试标记全部已读"
+echo "----------------------------------------"
+curl -X POST "${BASE_URL}/api/notifications/mark-all-read" \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: ${USER_ID}"
+
+echo ""
+echo "检查未读通知数量："
+curl -X GET "${BASE_URL}/api/notifications?user_id=${USER_ID}&is_read=0" | python -c "import sys, json; print('未读通知数量:', len(json.load(sys.stdin)['notifications']))"
+
+echo ""
+echo "=========================================="
+echo "测试完成"
+echo "=========================================="
+

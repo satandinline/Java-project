@@ -8,7 +8,10 @@ import sys
 import os
 
 # 添加当前目录到路径
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# 使用相对路径添加项目根目录到sys.path
+current_file_dir = os.path.dirname(os.path.realpath(__file__))
+project_root = os.path.dirname(current_file_dir)
+sys.path.insert(0, project_root)
 
 from minzu_festivals_spider import MinzuFestivalsSpider
 from wikipedia_spider import WikipediaSpider

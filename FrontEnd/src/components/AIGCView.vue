@@ -345,6 +345,13 @@
               >
                 🎨 图片AIGC
               </button>
+              <button 
+                class="mode-btn secondary-creation-btn"
+                @click="goToSecondaryCreation"
+                title="二次创作专区"
+              >
+                ✨ 二次创作
+              </button>
             </div>
             <label class="upload-btn">
               <input 
@@ -441,19 +448,13 @@ import CommentSection from './CommentSection.vue';
 
 const router = useRouter();
 
-// 获取当前登录用户信息
-const getCurrentUser = () => {
-  const userInfoStr = localStorage.getItem('userInfo');
-  if (userInfoStr) {
-    try {
-      return JSON.parse(userInfoStr);
-    } catch (e) {
-      console.error('解析用户信息失败:', e);
-      return null;
-    }
-  }
-  return null;
+// 跳转到二次创作专区
+const goToSecondaryCreation = () => {
+  router.push('/secondary-creation');
 };
+
+// 导入统一的getCurrentUser函数
+import { getCurrentUser } from '../utils/api.js';
 
 // 获取用户昵称和头像
 const currentUserInfo = computed(() => getCurrentUser());
@@ -577,10 +578,8 @@ const extractConversationTitle = async (messages) => {
         return title;
       }
     } else {
-      console.warn('提取主题API调用失败，使用降级方案');
     }
   } catch (error) {
-    console.error('提取主题失败:', error);
   }
   
   // 降级方案：从对话中提取关键词
@@ -669,11 +668,9 @@ const createNewSession = async () => {
       uploadedImages.value = [];
       return newSession;
     } else {
-      console.error('创建会话失败:', data.message);
       return null;
     }
   } catch (error) {
-    console.error('创建会话失败:', error);
     return null;
   }
 };
@@ -736,10 +733,8 @@ const loadSession = async (sessionId) => {
       await nextTick();
       scrollToBottom();
     } else {
-      console.error('加载会话失败:', data.message);
     }
   } catch (error) {
-    console.error('加载会话失败:', error);
   }
 };
 
@@ -773,7 +768,6 @@ const saveCurrentSession = async () => {
         }
       }
     } catch (error) {
-      console.error('[前端] 提取主题失败:', error);
       // 提取失败时使用降级方案
       const firstUserMsg = currentConversation.value.find(m => m.role === 'user');
       if (firstUserMsg && firstUserMsg.content) {
@@ -806,7 +800,6 @@ const saveCurrentSession = async () => {
       session.title = title;
     }
   } catch (error) {
-    console.error('更新会话摘要失败:', error);
   }
 };
 
@@ -1034,7 +1027,6 @@ const sendMessage = async () => {
           }
         }
       } catch (e) {
-        console.error('解析错误响应失败:', e);
         // 使用默认错误信息
       }
       throw new Error(errorMessage);
@@ -1045,7 +1037,15 @@ const sendMessage = async () => {
       const data = await response.json();
       
       if (data.error) {
+        // 如果有错误，显示错误消息
         aiMessage.content = data.answer || data.error || '处理失败';
+        // 如果有默认图片，也显示出来
+        if (data.image_path) {
+          aiMessage.image_path = data.image_path;
+        }
+        // 不要抛出错误，让用户看到错误消息
+        currentConversation.value.push(aiMessage);
+        return;
       } else {
         aiMessage.content = data.answer || '处理成功';
         
@@ -1085,7 +1085,6 @@ const sendMessage = async () => {
       
       // 注意：消息已在后端AIGC chat接口中自动保存，这里不需要再次保存
     } catch (e) {
-      console.error('解析JSON响应失败:', e);
       aiMessage.content = '解析响应失败，请稍后重试';
     }
 
@@ -1098,7 +1097,6 @@ const sendMessage = async () => {
   } catch (error) {
     // 检查是否是用户主动取消
     if (error.name === 'AbortError') {
-      console.log('用户取消了生成');
       aiMessage.content = '生成已取消';
       // 移除AI消息占位符（因为已取消）
       const index = currentConversation.value.indexOf(aiMessage);
@@ -1109,7 +1107,6 @@ const sendMessage = async () => {
     }
     
     // 其他错误处理
-    console.error('发送消息失败:', error);
     const errorMessage = error.message || '未知错误';
     let errorContent = `抱歉，生成失败：${errorMessage}。`;
     
@@ -1134,7 +1131,6 @@ const sendMessage = async () => {
 const cancelGeneration = () => {
   if (abortController.value) {
     abortController.value.abort();
-    console.log('正在取消生成...');
   }
 };
 
@@ -1199,7 +1195,6 @@ const loadRetrievedResourcesForMessage = async (message) => {
       };
     }
   } catch (error) {
-    console.error('加载检索资源失败:', error);
   }
 };
 
@@ -1220,7 +1215,6 @@ const goToResourceDetailFromRetrieved = (item) => {
       query: query
     });
   } else {
-    console.warn('无法跳转：缺少资源ID或表名', item);
   }
 };
 
@@ -1245,7 +1239,6 @@ const loadNotifications = async () => {
       unreadNotifications.value = data.notifications?.length || 0;
     }
   } catch (error) {
-    console.error('加载通知失败:', error);
   }
 };
 
@@ -1362,13 +1355,10 @@ const loadSessionsFromDB = async () => {
         message_count: session.message_count || 0
       }));
       // 调试：打印会话模式
-      console.log('加载的会话列表:', sessionHistory.value.map(s => ({ id: s.id, mode: s.mode })));
     } else {
-      console.error('加载会话列表失败:', data.message);
       sessionHistory.value = [];
     }
   } catch (error) {
-    console.error('加载会话列表失败:', error);
     sessionHistory.value = [];
   }
 };
@@ -1477,7 +1467,6 @@ const deleteSelectedSessions = async () => {
       alert('删除失败：' + (data.message || '未知错误'));
     }
   } catch (error) {
-    console.error('删除会话失败:', error);
     alert('删除失败，请稍后重试');
   }
 };
@@ -1519,7 +1508,6 @@ const deleteAllSessions = async () => {
       alert('删除失败：' + (data.message || '未知错误'));
     }
   } catch (error) {
-    console.error('删除所有会话失败:', error);
     alert('删除失败，请稍后重试');
   }
 };
@@ -1562,7 +1550,6 @@ onMounted(async () => {
         currentConversation.value = messages;
       }
     } catch (e) {
-      console.error('恢复对话失败:', e);
     }
   }
 });
@@ -1896,7 +1883,8 @@ onMounted(async () => {
 }
 
 .message-item.user {
-  flex-direction: row;
+  flex-direction: row-reverse;  /* 用户消息在右边 */
+  justify-content: flex-start;   /* 左对齐 */
 }
 
 .message-item.assistant {
@@ -1933,12 +1921,26 @@ onMounted(async () => {
 .message-content-wrapper {
   flex: 1;
   max-width: calc(100% - 48px);
+  display: flex;
+  flex-direction: column;
+}
+
+.message-item.user .message-content-wrapper {
+  max-width: 50%;  /* 用户消息宽度为1/2 */
+  align-items: flex-start;  /* 左对齐 */
+  margin-left: auto;  /* 靠右显示 */
 }
 
 .message-role-label {
   font-size: 12px;
   color: #999;
   margin-bottom: 4px;
+}
+
+.message-item.user .message-role-label {
+  text-align: left;  /* 用户消息的标签左对齐（因为消息框本身靠右） */
+  width: 100%;
+  align-self: flex-start;  /* 确保标签左对齐 */
 }
 
 .message-content {
@@ -1950,6 +1952,7 @@ onMounted(async () => {
 
 .message-item.user .message-content {
   background: #e3f2fd;
+  text-align: left;  /* 内容左对齐 */
 }
 
 .message-text {
@@ -2330,6 +2333,15 @@ onMounted(async () => {
   color: white;
   border-color: #409eff;
   font-weight: 500;
+}
+
+.secondary-creation-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.secondary-creation-btn:hover {
+  background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
 }
 
 .upload-btn {

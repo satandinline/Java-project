@@ -10,7 +10,9 @@ import threading
 import io
 
 # 添加项目根目录到路径，以便导入db_connection
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# 使用相对路径添加项目根目录到sys.path
+current_file_dir = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, current_file_dir)
 from db_connection import get_user_db_connection, get_user_db_config
 from festival_name_utils import extract_and_convert_festival_name
 

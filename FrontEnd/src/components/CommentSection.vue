@@ -28,6 +28,8 @@
         v-for="comment in comments" 
         :key="comment.id"
         class="comment-item"
+        :class="{ 'highlight-comment': highlightCommentId === comment.id }"
+        :id="`comment-${comment.id}`"
       >
         <div class="comment-header-info">
           <img 
@@ -123,6 +125,10 @@ const props = defineProps({
   userId: {
     type: Number,
     required: true
+  },
+  highlightCommentId: {
+    type: Number,
+    default: null
   }
 });
 
@@ -146,7 +152,6 @@ const loadComments = async () => {
       // 初始化点赞状态（这里可以调用API获取用户已点赞的评论）
     }
   } catch (error) {
-    console.error('加载评论失败:', error);
   }
 };
 
@@ -176,7 +181,6 @@ const submitComment = async () => {
       alert(data.message || '发布评论失败');
     }
   } catch (error) {
-    console.error('发布评论失败:', error);
     alert('发布评论失败，请重试');
   } finally {
     isSubmitting.value = false;
@@ -209,7 +213,6 @@ const toggleLike = async (commentId) => {
       }
     }
   } catch (error) {
-    console.error('点赞失败:', error);
   }
 };
 
@@ -261,7 +264,6 @@ const submitReply = async (commentId) => {
       alert(data.message || '回复失败');
     }
   } catch (error) {
-    console.error('回复失败:', error);
     alert('回复失败，请重试');
   } finally {
     isSubmitting.value = false;
@@ -285,8 +287,33 @@ const formatTime = (timeStr) => {
   return date.toLocaleDateString('zh-CN');
 };
 
+// 滚动到指定评论
+const scrollToComment = (commentId) => {
+  const commentElement = document.getElementById(`comment-${commentId}`);
+  if (commentElement) {
+    commentElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // 添加高亮效果
+    commentElement.classList.add('highlight-comment');
+    setTimeout(() => {
+      commentElement.classList.remove('highlight-comment');
+    }, 3000);
+  }
+};
+
+// 暴露方法给父组件
+defineExpose({
+  scrollToComment
+});
+
 onMounted(() => {
   loadComments();
+  
+  // 如果有高亮评论ID，加载后滚动到该评论
+  if (props.highlightCommentId) {
+    setTimeout(() => {
+      scrollToComment(props.highlightCommentId);
+    }, 500);
+  }
 });
 </script>
 
@@ -509,6 +536,22 @@ onMounted(() => {
   text-align: center;
   padding: 40px;
   color: #999;
+}
+
+.highlight-comment {
+  background: #fff3cd !important;
+  border: 2px solid #ffc107 !important;
+  border-radius: 8px;
+  animation: highlight-pulse 1s ease-in-out;
+}
+
+@keyframes highlight-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.7);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(255, 193, 7, 0);
+  }
 }
 </style>
 

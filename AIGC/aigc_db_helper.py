@@ -12,7 +12,10 @@ from typing import Dict, Optional, List
 from PIL import Image
 
 # 添加项目根目录到路径，以便导入父目录的模块
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 使用相对路径添加项目根目录到sys.path
+current_file_dir = os.path.dirname(os.path.realpath(__file__))
+project_root = os.path.dirname(current_file_dir)
+sys.path.insert(0, project_root)
 from db_connection import get_user_db_connection, get_user_db_config
 from festival_name_utils import chinese_to_english_festival, extract_and_convert_festival_name
 

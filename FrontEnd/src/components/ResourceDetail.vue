@@ -63,6 +63,16 @@
       <p>该资源暂无图片</p>
     </div>
 
+    <!-- 评论区域 -->
+    <div v-if="!isLoading && !error && resourceInfo" class="comments-section">
+      <CommentSection 
+        :resource-id="resourceId" 
+        :user-id="currentUserId"
+        :highlight-comment-id="highlightCommentId"
+        ref="commentSectionRef"
+      />
+    </div>
+
     <!-- 图片预览模态框 -->
     <div v-if="showImageModal" class="image-modal" @click="closeImageModal">
       <div class="modal-content" @click.stop>
@@ -85,8 +95,9 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
+import CommentSection from './CommentSection.vue';
 
 const router = useRouter();
 const route = useRoute();
@@ -95,24 +106,56 @@ const resourceInfo = ref(null);
 const imageList = ref([]);
 const isLoading = ref(false);
 const error = ref(null);
+const resourceId = ref(null);
+const currentUserId = ref(null);
+const highlightCommentId = ref(null);
+const commentSectionRef = ref(null);
 
 const showImageModal = ref(false);
 const currentImageIndex = ref(0);
 const currentImage = computed(() => imageList.value[currentImageIndex.value] || null);
 
+// 导入统一的getCurrentUser函数
+import { getCurrentUser } from '../utils/api.js';
+
+// 获取当前用户ID（适配原有逻辑）
+const getCurrentUserId = () => {
+  const user = getCurrentUser();
+  return user ? user.id : null;
+};
+
 // 加载资源详情
 const loadResourceDetail = async () => {
+  // 支持多种参数方式：festival_name, entity_name, id+table
   const festivalName = route.query.festival_name || route.query.entity_name;
-  if (!festivalName) {
-    error.value = '缺少资源名称参数';
-    return;
+  const resourceIdParam = route.query.id;
+  const tableParam = route.query.table;
+  const commentIdParam = route.query.comment_id;
+  
+  // 如果有comment_id，设置高亮
+  if (commentIdParam) {
+    highlightCommentId.value = parseInt(commentIdParam);
   }
-
+  
+  // 获取当前用户ID
+      currentUserId.value = getCurrentUserId();
+  
   isLoading.value = true;
   error.value = null;
 
   try {
-    const response = await fetch(`/api/resource/detail?festival_name=${encodeURIComponent(festivalName)}`);
+    let response;
+    if (resourceIdParam && tableParam) {
+      // 使用id和table参数查询
+      response = await fetch(`/api/resource/detail?id=${resourceIdParam}&table=${tableParam}`);
+    } else if (festivalName) {
+      // 使用festival_name参数查询
+      response = await fetch(`/api/resource/detail?festival_name=${encodeURIComponent(festivalName)}`);
+    } else {
+      error.value = '缺少资源参数';
+      isLoading.value = false;
+      return;
+    }
     
     if (!response.ok) {
       throw new Error(`HTTP错误! 状态: ${response.status}`);
@@ -128,11 +171,29 @@ const loadResourceDetail = async () => {
         total_images: data.total_images
       };
       imageList.value = data.images || [];
+      
+      // 如果有resource_id，设置resourceId用于评论
+      if (data.resource_id) {
+        resourceId.value = data.resource_id;
+      } else if (resourceIdParam) {
+        resourceId.value = parseInt(resourceIdParam);
+      }
+      
+      // 如果有comment_id，滚动到评论位置
+      if (commentIdParam && commentSectionRef.value) {
+        nextTick(() => {
+          // 延迟一下确保评论已加载
+          setTimeout(() => {
+            if (commentSectionRef.value && commentSectionRef.value.scrollToComment) {
+              commentSectionRef.value.scrollToComment(parseInt(commentIdParam));
+            }
+          }, 500);
+        });
+      }
     } else {
       error.value = data.message || '获取资源详情失败';
     }
   } catch (err) {
-    console.error('获取资源详情失败:', err);
     error.value = `加载失败：${err.message || '未知错误'}`;
   } finally {
     isLoading.value = false;

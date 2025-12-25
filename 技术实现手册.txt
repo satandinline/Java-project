@@ -1,605 +1,450 @@
-================================================================================
 公共文化资源管理系统 - 技术实现手册
-================================================================================
 
-版本：2.5
-更新日期：2025年12月23日
+版本： 2.7  
+更新日期： 2025年12月25日
 
-重要更新：
-- AIGC功能修复与优化：
-  * 修复即时显示用户消息：用户发送消息后立即保存到数据库并显示，使用UPDATE机制避免重复插入
-  * 修复重复用户消息问题：改为使用message_id更新现有消息，而不是重复插入
-  * 修复retrieval_id字段保存：从RAG检索结果中提取资源ID并正确保存到qa_messages表的retrieval_id字段
-  * 修复image_url处理：文字AIGC如果没有用户上传图片，使用AIGC_graph/default.jpg作为默认图片
-  * 修复用户上传图片存储：用户上传的AIGC图片统一存入AIGC_graph_from_users文件夹，逻辑与uploads一致
-  * 修复rag_system变量作用域问题：在函数开始处初始化rag_system变量，避免UnboundLocalError
-  * 添加AIGC_graph_from_users路由支持：新增/api/AIGC_graph_from_users/<filename>路由提供用户上传图片访问
-  * 优化消息保存机制：支持通过message_id更新现有消息，避免重复保存
-- 数据库结构更新：
-  * qa_messages表添加retrieval_id字段（TEXT类型），用于存储检索到的资源ID列表（英文逗号分隔）
-  * 支持从qa_messages表直接读取retrieval_id，无需从AIGC_cultural_resources表查询
-- 前端配置更新：
-  * vite.config.js添加AIGC_graph_from_users代理配置
-- 技术实现手册更新：
-- AIGC功能优化：
-  * 用户发送消息后立即保存到数据库并显示，不等待AI生成完成
-  * 检索资源持久化显示：在AIGC资源表中保存检索资源ID列表，支持折叠/展开查看
-  * 点击检索资源名称可跳转到资源详情页（与首页资源卡片一致）
-  * 检索功能优化：扩展检索范围，支持更多字段（包括用户上传资源表）
-  * AIGC文字资源在首页显示时统一使用 `AIGC_graph/default.jpg` 作为图片路径
-- 资源上传与标注增强：
-  * 文本类型支持直接输入文本内容（无需上传文件）
-  * 支持Word文档（.doc, .docx）和PDF（.pdf）文件上传，自动解析内容
-  * 图像类型仅支持JPG（.jpg）和PNG（.png）格式
-  * 用户可在上传时进行标注（格式与AI标注、人工标注一致）
-- 标注任务系统优化：
-  * 统一标注任务状态：待标注、AI标注中、AI标注完成、已完成
-  * 支持三种资源来源：爬虫抓取、用户上传、AIGC生成
-  * 标注任务中显示资源内容（文本预览或图片）
-  * 权限控制：普通用户只能看到自己上传的资源任务，管理员可看全部
-  * 查看标注：只读模式，不可编辑
-  * 编辑标注：可编辑模式，支持修改所有标注字段
-- 自动补偿与迁移：
-  * 后台每5分钟轮询“待标注”任务，自动触发AI标注防止遗漏
-  * 人工标注审核通过后自动迁移：资源入 `cultural_resources`，实体入 `cultural_entities`，图片入 `crawled_images`
-  * 若无图片，自动在图片表写入默认图片 `uploads/default.jpg`
-- 数据库结构优化：
-  * qa_sessions表添加mode字段（ENUM('text', 'image')）
-  * AIGC_cultural_resources表添加retrieved_resource_ids字段（TEXT，英文逗号分隔）
-  * cultural_resources_from_user和AIGC_cultural_resources表增加storage_path字段
-  * 统一资源存储路径管理
+重要更新
 
-================================================================================
-一、目录
-================================================================================
+搜索功能修复与优化（2025-12-25）
+修复SQL查询错误：修复了全文检索中AIGC_graph表不存在entity_id字段的错误
+修复了cultural_entities表查询，正确使用LEFT JOIN crawled_images获取图片
+修复了AIGC_cultural_entities表查询，使用related_images_url字段获取图片
+添加了GROUP BY子句，确保SQL查询符合MySQL规范
+优化图片URL构建：
+统一了图片URL的构建逻辑，支持多种图片路径格式
+正确处理crawled_images路径、related_images_url字段和默认图片
+确保所有搜索端点（/api/search、/api/ai_search）都正确返回图片URL
+改进错误处理：
+改进了AI语义分析的JSON解析错误处理
+添加了详细的错误日志，便于调试
+优化了搜索系统初始化失败时的错误提示
 
-1. 系统架构
-2. 技术栈
-3. 数据库设计
-4. 核心功能实现
-5. API接口文档
-6. 代码规范与最佳实践
-7. 部署与运维
+AIGC功能修复与优化
+修复即时显示用户消息：用户发送消息后立即保存到数据库并显示，使用UPDATE机制避免重复插入
+修复重复用户消息问题：改为使用message_id更新现有消息，而不是重复插入
+修复retrieval_id字段保存：从RAG检索结果中提取资源ID并正确保存到qa_messages表的retrieval_id字段
+修复image_url处理：文字AIGC如果没有用户上传图片，使用AIGC_graph/default.jpg作为默认图片
+修复用户上传图片存储：用户上传的AIGC图片统一存入AIGC_graph_from_users文件夹，逻辑与uploads一致
+修复rag_system变量作用域问题：在函数开始处初始化rag_system变量，避免UnboundLocalError
+添加AIGC_graph_from_users路由支持：新增/api/AIGC_graph_from_users/<filename>路由提供用户上传图片访问
+优化消息保存机制：支持通过message_id更新现有消息，避免重复保存
 
-================================================================================
+数据库结构更新
+qa_messages表添加retrieval_id字段（TEXT类型），用于存储检索到的资源ID列表（英文逗号分隔）
+支持从qa_messages表直接读取retrieval_id，无需从AIGC_cultural_resources表查询
+
+前端配置更新
+vite.config.js添加AIGC_graph_from_users代理配置
+
+AIGC功能优化
+用户发送消息后立即保存到数据库并显示，不等待AI生成完成
+检索资源持久化显示：在AIGC资源表中保存检索资源ID列表，支持折叠/展开查看
+点击检索资源名称可跳转到资源详情页（与首页资源卡片一致）
+检索功能优化：扩展检索范围，支持更多字段（包括用户上传资源表）
+AIGC文字资源在首页显示时统一使用 AIGC_graph/default.jpg 作为图片路径
+
+资源上传与标注增强
+文本类型支持直接输入文本内容（无需上传文件）
+支持Word文档（.doc, .docx）和PDF（.pdf）文件上传，自动解析内容
+图像类型仅支持JPG（.jpg）和PNG（.png）格式
+用户可在上传时进行标注（格式与AI标注、人工标注一致）
+
+标注任务系统优化
+统一标注任务状态：待标注、AI标注中、AI标注完成、已完成
+支持三种资源来源：爬虫抓取、用户上传、AIGC生成
+标注任务中显示资源内容（文本预览或图片）
+权限控制：普通用户只能看到自己上传的资源任务，管理员可看全部
+查看标注：只读模式，不可编辑
+编辑标注：可编辑模式，支持修改所有标注字段
+
+自动补偿与迁移
+后台每5分钟轮询"待标注"任务，自动触发AI标注防止遗漏
+人工标注审核通过后自动迁移：资源入 cultural_resources，实体入 cultural_entities，图片入 crawled_images
+若无图片，自动在图片表写入默认图片 uploads/default.jpg
+
+数据库结构优化
+qa_sessions表添加mode字段（ENUM('text', 'image')）
+AIGC_cultural_resources表添加retrieved_resource_ids字段（TEXT，英文逗号分隔）
+cultural_resources_from_user和AIGC_cultural_resources表增加storage_path字段
+统一资源存储路径管理
+
+目录
+
+系统架构
+技术栈
+数据库设计
+核心功能实现
+API接口文档
+代码规范与最佳实践
+部署与运维
 
 系统架构
 
 整体架构
 
-┌─────────────────┐
-│   前端 (Vue.js) │
-│   Port: 5173    │
-└────────┬────────┘
-         │ HTTP/API (代理)
-         ▼
-┌─────────────────┐
-│ Java后端 (Spring Boot) │
-│  Port: 8000     │
-│  JDBC连接MySQL  │
-└────────┬────────┘
-         │
-    ┌────┴────┐
-    │         │
-    ▼         ▼
-┌────────┐ ┌──────────┐
-│ MySQL  │ │ Python服务│
-│ 数据库 │ │ (可选，AIGC)│
-│(JDBC)  │ │ Port:7200│
-└────────┘ └──────────┘
+
 
 说明：
-- Java后端负责主要的API服务（认证、资源、统计等）
-- Python服务可选，用于AIGC功能（AI生成）和爬虫功能
-- 数据库使用JDBC连接（Java后端）
+Java后端负责主要的API服务（认证、资源、统计等）
+Python服务可选，用于AIGC功能（AI生成）和爬虫功能
+数据库使用JDBC连接（Java后端）
 
 模块划分
 
-1. 前端模块 (`FrontEnd/`)
-   - 用户界面组件
-   - 路由管理
-   - 状态管理
+前端模块 (FrontEnd/)
+用户界面组件
+路由管理
+状态管理
 
-2. Java后端模块 (`backend/`)
-   - Spring Boot应用主类
-   - Controller层：RESTful API接口
-   - Service层：业务逻辑处理
-   - DAO层：数据访问（使用JDBC）
-   - Entity层：实体类定义
-   - Config层：配置类（数据源、Web配置等）
+Java后端模块 (backend/)
+Spring Boot应用主类
+Controller层：RESTful API接口
+Service层：业务逻辑处理
+DAO层：数据访问（使用JDBC）
+Entity层：实体类定义
+Config层：配置类（数据源、Web配置等）
 
-3. Python后端模块（可选，用于AIGC功能）
-   - `AIGC/aigc_api_server.py`：AIGC API服务器
-   - RAG检索增强生成
-   - 图像生成
-   - 多模态理解
+Python后端模块（可选，用于AIGC功能）
+AIGC/aigc_api_server.py：AIGC API服务器
+RAG检索增强生成
+图像生成
+多模态理解
 
-4. 数据爬取模块 (`spider/`)
-   - 民族文化资源库爬虫
-   - 维基百科爬虫
-   - 数据清洗与存储
+数据爬取模块 (spider/)
+民族文化资源库爬虫
+维基百科爬虫
+数据清洗与存储
 
-5. 数据库模块 (`database_files/`)
-   - 数据库初始化
-   - 表结构定义
-   - 初始化脚本
-
-================================================================================
+数据库模块 (database_files/)
+数据库初始化
+表结构定义
+初始化脚本
 
 技术栈
 
 Java后端技术
-
-- Java: 开发语言（推荐使用最新LTS版本，如Java 17/21）
-- Spring Boot 3.2.0: Web应用框架
-- Spring JDBC: 数据库访问框架
-- JDBC: MySQL数据库连接
-- MySQL Connector/J: MySQL JDBC驱动（最新版本）
-- Maven: 项目管理和构建工具
+Java: 开发语言（推荐使用最新LTS版本，如Java 17/21）
+Spring Boot 3.2.0: Web应用框架
+Spring JDBC: 数据库访问框架
+JDBC: MySQL数据库连接
+MySQL Connector/J: MySQL JDBC驱动（最新版本）
+Maven: 项目管理和构建工具
 
 Python后端技术（可选，用于AIGC功能）
-
-- Python 3.7+
-- Flask: Web框架（AIGC服务）
-- PyMySQL: MySQL数据库驱动（AIGC服务使用）
-- LangChain: RAG框架
-- ChromaDB: 向量数据库
-- Pillow (PIL): 图像处理
-- BeautifulSoup4: HTML解析
-- Requests: HTTP请求
+Python 3.7+
+Flask: Web框架（AIGC服务）
+PyMySQL: MySQL数据库驱动（AIGC服务使用）
+LangChain: RAG框架
+ChromaDB: 向量数据库
+Pillow (PIL): 图像处理
+BeautifulSoup4: HTML解析
+Requests: HTTP请求
 
 前端技术
-
-- Vue.js 3: 前端框架（Composition API）
-- Vite: 构建工具
-- Vue Router 4: 路由管理
-- Fetch API: HTTP客户端
+Vue.js 3: 前端框架（Composition API）
+Vite: 构建工具
+Vue Router 4: 路由管理
+Fetch API: HTTP客户端
 
 数据库
-
-- MySQL 8.0+: 关系型数据库（推荐使用最新版本）
-- 字符集: utf8mb4（支持emoji等特殊字符）
-- 连接方式: JDBC（Java后端），PyMySQL（Python服务，仅用于AIGC和爬虫）
-- 版本要求: MySQL 8.0 或更高版本
+MySQL 8.0+: 关系型数据库（推荐使用最新版本）
+字符集: utf8mb4（支持emoji等特殊字符）
+连接方式: JDBC（Java后端），PyMySQL（Python服务，仅用于AIGC和爬虫）
+版本要求: MySQL 8.0 或更高版本
 
 AI模型（需要Python服务）
-
-- 文字生成: 通义千问 (Tongyi) / OpenAI GPT
-- 图像生成: 火山引擎 Seedream (Huoshan) / 通义千问
-- 图像理解: 通义千问多模态模型
-
-================================================================================
+文字生成: 通义千问 (Tongyi) / OpenAI GPT
+图像生成: 火山引擎 Seedream (Huoshan) / 通义千问
+图像理解: 通义千问多模态模型
 
 数据库设计
 
 核心表结构
 
-1. 用户表 (users)
+用户表 (users)
 
-CREATE TABLE users (
-  id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  account VARCHAR(20) UNIQUE NOT NULL COMMENT '用户账号（8-10位数字，系统自动生成，永久不可修改）',
-  password_hash VARCHAR(255) NOT NULL COMMENT '加密后的密码（SHA-256）',
-  role ENUM('普通用户', '管理员') DEFAULT '普通用户',
-  nickname VARCHAR(100) COMMENT '用户昵称（可修改）',
-  avatar_path VARCHAR(255) DEFAULT '/default.jpg',
-  security_question VARCHAR(255) COMMENT '自定义安全问题',
-  security_answer_hash VARCHAR(255) COMMENT '安全问题答案哈希',
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+
 
 设计要点：
-- `account` 字段：系统自动生成的8-10位数字账号，唯一且不可修改
-- `password_hash`：使用SHA-256单向哈希加密
-- `role`：枚举类型，区分普通用户和管理员
+account 字段：系统自动生成的8-10位数字账号，唯一且不可修改
+password_hash：使用SHA-256单向哈希加密
+role：枚举类型，区分普通用户和管理员
 
-2. 文化资源表 (cultural_resources)
+文化资源表 (cultural_resources)
 
 存储爬虫抓取或用户上传的原始文化素材。
 
 关键字段：
-- `title`: 节日名称（英文）
-- `content_feature_data`: JSON格式的文本内容和元数据
-- `upload_user_id`: 上传用户ID（外键，级联删除时设为NULL）
+title: 节日名称（英文）
+content_feature_data: JSON格式的文本内容和元数据
+upload_user_id: 上传用户ID（外键，级联删除时设为NULL）
 
-3. 文化实体表 (cultural_entities)
+文化实体表 (cultural_entities)
 
 存储从资源中提取的结构化实体信息。
 
 关键字段：
-- `entity_name`: 实体名称（中文，已清洗）
-- `entity_type`: ENUM类型（'人物', '作品', '事件', '地点', '其他'）
-- `description`: 详细描述（已清洗）
+entity_name: 实体名称（中文，已清洗）
+entity_type: ENUM类型（'人物', '作品', '事件', '地点', '其他'）
+description: 详细描述（已清洗）
 
-4. 爬虫图片表 (crawled_images)
+爬虫图片表 (crawled_images)
 
 存储爬虫抓取的图片元数据。
 
 关键字段：
-- `file_name`: 文件名（如 "8.jpg" 或 "8-1.jpg"）
-- `storage_path`: 存储路径（如 "crawled_images/8.jpg"）
-- `resource_id`: 关联的文化资源ID（外键，可为NULL）
-- `entity_id`: 关联的文化实体ID（外键，可为NULL）
-- `festival_name`: 节日名称（中文，用于快速查询）
-- `tags`: JSON数组格式的标签（已清洗，移除纯数字等无关信息）
+file_name: 文件名（如 "8.jpg" 或 "8-1.jpg"）
+storage_path: 存储路径（如 "crawled_images/8.jpg"）
+resource_id: 关联的文化资源ID（外键，可为NULL）
+entity_id: 关联的文化实体ID（外键，可为NULL）
+festival_name: 节日名称（中文，用于快速查询）
+tags: JSON数组格式的标签（已清洗，移除纯数字等无关信息）
 
 关联关系：
-- 如果图片属于某个文字资源，`resource_id` 和 `entity_id` 不为NULL
-- 如果图片是独立抓取的，`resource_id` 和 `entity_id` 为NULL
+如果图片属于某个文字资源，resource_id 和 entity_id 不为NULL
+如果图片是独立抓取的，resource_id 和 entity_id 为NULL
 
-5. 问答会话表 (qa_sessions)
-
-存储AIGC对话会话信息。
-
-关键字段：
-- `user_id`: 用户ID（外键，关联users表）
-- `summary`: 会话摘要（自动提取的标题，不超过20字）
-- `mode`: 会话模式（ENUM('text', 'image')，标识是文字AIGC还是图片AIGC）
-- `created_at`: 创建时间
-
-6. 问答消息表 (qa_messages)
-
-存储AIGC对话中的每条消息（用户消息和AI回复）。
-
-关键字段：
-- `user_id`: 用户ID（外键，关联users表）
-- `session_id`: 会话ID（外键，关联qa_sessions表）
-- `user_message`: 用户输入的信息（TEXT类型）
-- `ai_message`: AI的回答（TEXT类型）
-- `model`: 模型类型（ENUM('text', 'image')，标识使用的模型）
-- `image_url`: 图片URL（文字类型AIGC如果没有用户上传图片，使用AIGC_graph/default.jpg；图片类型AIGC存储生成的图片地址）
-- `image_from_users_url`: 用户上传的图片URL（存储在AIGC_graph_from_users文件夹中，JSON格式存储多张图片）
-- `retrieval_id`: 检索的资源ID列表（TEXT类型，多个ID用英文逗号分隔，用于存储RAG检索到的资源ID）
-- `create_time`: 创建时间
-- `timestamp`: 消息发送时间
-
-消息保存机制：
-- 用户发送消息后立即保存到数据库（ai_message为空）
-- AI生成完成后使用message_id更新现有消息（UPDATE操作），避免重复插入
-- 检索资源ID从RAG结果中提取并保存到retrieval_id字段
-
-7. 用户访问日志表 (user_access_logs)
+用户访问日志表 (user_access_logs)
 
 记录所有用户访问行为。
 
 关键字段：
-- `user_id`: 用户ID（外键，关联users表，包括管理员）
-- `access_type`: 访问类型（'page_view'：页面访问，'aigc_text'：文字AIGC，'aigc_image'：图片AIGC，'search'：搜索，'upload'：上传等）
-- `access_path`: 访问路径（如：/aigc, /search等）
-- `resource_id`: 关联资源ID（可选）
-- `resource_type`: 资源类型（可选）
-- `access_time`: 访问时间
+user_id: 用户ID（外键，关联users表，包括管理员）
+access_type: 访问类型（'page_view'：页面访问，'aigc_text'：文字AIGC，'aigc_image'：图片AIGC，'search'：搜索，'upload'：上传等）
+access_path: 访问路径（如：/aigc, /search等）
+resource_id: 关联资源ID（可选）
+resource_type: 资源类型（可选）
+access_time: 访问时间
 
 数据关联关系
 
-cultural_resources (1) ──< (N) crawled_images
-cultural_entities (1) ──< (N) crawled_images
-users (1) ──< (N) qa_sessions
-qa_sessions (1) ──< (N) qa_messages
-users (1) ──< (N) user_access_logs
+
 
 用户表字段说明
 
 users表包含以下关键字段：
-- `account`: 用户账号（8-10位数字，系统自动生成，永久不可修改）
-- `password_hash`: 密码哈希值（SHA-256）
-- `role`: 用户角色（'普通用户' 或 '管理员'）
-- `nickname`: 用户昵称（可选，可修改，最多100字符）
-- `signature`: 个人签名（可选，可修改，最多500字符）
-- `avatar_path`: 头像路径（默认：'/default.jpg'）
-- `security_question`: 自定义安全问题（用于找回密码）
-- `security_answer_hash`: 安全问题答案哈希值（SHA-256）
-
-================================================================================
+account: 用户账号（8-10位数字，系统自动生成，永久不可修改）
+password_hash: 密码哈希值（SHA-256）
+role: 用户角色（'普通用户' 或 '管理员'）
+nickname: 用户昵称（可选，可修改，最多100字符）
+signature: 个人签名（可选，可修改，最多500字符）
+avatar_path: 头像路径（默认：'/default.jpg'）
+security_question: 自定义安全问题（用于找回密码）
+security_answer_hash: 安全问题答案哈希值（SHA-256）
 
 数据库连接方式
 
 Java后端 - JDBC连接
 
-Java后端使用JDBC连接MySQL数据库，配置在 `DataSourceConfig.java` 中：
+Java后端使用JDBC连接MySQL数据库，配置在 DataSourceConfig.java 中：
 
-```java
-@Configuration
-public class DataSourceConfig {
-    @Bean
-    public DataSource dataSource() {
-        DriverManagerDataSource dataSource = new DriverManagerDataSource();
-        dataSource.setDriverClassName("com.mysql.cj.jdbc.Driver");
-        dataSource.setUrl("jdbc:mysql://127.0.0.1:3306/java_project?...");
-        dataSource.setUsername("root");
-        dataSource.setPassword("password");
-        return dataSource;
-    }
-    
-    @Bean
-    public JdbcTemplate jdbcTemplate(DataSource dataSource) {
-        return new JdbcTemplate(dataSource);
-    }
-}
-```
 
-数据库配置在 `application.yml` 中：
-```yaml
-spring:
-  datasource:
-    driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://127.0.0.1:3306/java_project?useUnicode=true&characterEncoding=utf8mb4&useSSL=false&serverTimezone=Asia/Shanghai
-    username: root
-    password: your_password  # 请替换为实际密码
-```
+
+数据库配置在 application.yml 中：
+
 
 使用JdbcTemplate进行数据库操作：
-```java
-@Repository
-public class UserDao {
-    @Autowired
-    private JdbcTemplate jdbcTemplate;
-    
-    public Optional<User> findById(Long id) {
-        String sql = "SELECT * FROM users WHERE id = ?";
-        List<User> users = jdbcTemplate.query(sql, 
-                new BeanPropertyRowMapper<>(User.class), id);
-        return users.isEmpty() ? Optional.empty() : Optional.of(users.get(0));
-    }
-}
-```
+
 
 Python后端 - PyMySQL连接（爬虫和AIGC使用）
 
 Python模块（爬虫、AIGC）使用PyMySQL连接数据库，统一使用DictCursor确保返回字典格式：
 
-```python
-from pymysql.cursors import DictCursor
-import pymysql
 
-conn = pymysql.connect(
-    host="127.0.0.1",
-    port=3306,
-    user="root",
-    password="password",
-    database="java_project",
-    charset="utf8mb4",
-    cursorclass=DictCursor  # 统一使用DictCursor，确保返回字典格式
-)
-
-# 在查询时也显式使用DictCursor
-with conn.cursor(DictCursor) as cursor:
-    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
-    user = cursor.fetchone()  # 返回字典格式
-```
 
 重要说明：
-- 所有Python数据库连接统一使用DictCursor，确保查询结果返回字典格式而非元组
-- 在db_connection.py中已统一配置DictCursor
-- 在aigc_api_server.py等模块中显式使用DictCursor确保兼容性
+所有Python数据库连接统一使用DictCursor，确保查询结果返回字典格式而非元组
+在db_connection.py中已统一配置DictCursor
+在aigc_api_server.py等模块中显式使用DictCursor确保兼容性
 
 核心功能实现
 
-1. 用户认证系统（Java后端）
+用户认证系统（Java后端）
 
 账号生成逻辑（Java实现）
 
-```java
-public static String generateRandomAccount() {
-    Random random = new Random();
-    int length = random.nextInt(3) + 8; // 8-10位
-    int firstDigit = random.nextInt(9) + 1; // 1-9
-    StringBuilder account = new StringBuilder();
-    account.append(firstDigit);
-    for (int i = 1; i < length; i++) {
-        account.append(random.nextInt(10));
-    }
-    return account.toString();
-}
-```
+
 
 特点：
-- 自动生成唯一账号
-- 最多尝试100次确保唯一性
-- 账号一旦生成永久不可修改
+自动生成唯一账号
+最多尝试100次确保唯一性
+账号一旦生成永久不可修改
 
 密码加密（Java实现）
 
 使用SHA-256单向哈希算法：
 
-```java
-public static String hashPassword(String password) {
-    MessageDigest digest = MessageDigest.getInstance("SHA-256");
-    byte[] hash = digest.digest(password.getBytes());
-    StringBuilder hexString = new StringBuilder();
-    for (byte b : hash) {
-        String hex = Integer.toHexString(0xff & b);
-        if (hex.length() == 1) {
-            hexString.append('0');
-        }
-        hexString.append(hex);
-    }
-    return hexString.toString();
-}
-```
 
-2. 数据爬取系统
+
+数据爬取系统
 
 图片命名规则
 
 单图片资源：
-- 格式：`{序号}.jpg`（如：`8.jpg`）
+格式：{序号}.jpg（如：8.jpg）
 
 多图片资源：
-- 格式：`{基准序号}-{子序号}.jpg`（如：`8-1.jpg`, `8-2.jpg`, `8-3.jpg`）
-- 规则：如果检测到资源有多张图片（>=2），所有图片都使用分组命名
+格式：{基准序号}-{子序号}.jpg（如：8-1.jpg, 8-2.jpg, 8-3.jpg）
+规则：如果检测到资源有多张图片（>=2），所有图片都使用分组命名
 
 数据清洗逻辑
 
 中华民族资源库数据清洗：
-- 移除分页信息（"上一页 下一页 总记录数"等）
-- 移除日期格式（如"中元节2019-08-14"）
-- 移除重复的节日名称行
-- 移除纯节日名称列表项
+移除分页信息（"上一页 下一页 总记录数"等）
+移除日期格式（如"中元节2019-08-14"）
+移除重复的节日名称行
+移除纯节日名称列表项
 
 维基百科数据清洗：
-- 移除引用标记（如`[1]`、`[注 1]`）
-- 移除编辑链接标记（如`[编辑]`）
-- 移除分类信息
+移除引用标记（如[1]、[注 1]）
+移除编辑链接标记（如[编辑]）
+移除分类信息
 
 Tags清洗：
-- 移除纯数字标签（URL路径中的ID）
-- 移除空字符串和太短的标签（<2字符）
-- 保留有意义的标签（节日名称、文化关键词等）
+移除纯数字标签（URL路径中的ID）
+移除空字符串和太短的标签（<2字符）
+保留有意义的标签（节日名称、文化关键词等）
 
-3. AIGC系统
+AIGC系统
 
 RAG检索增强生成
 
 工作流程：
-1. 用户输入问题或上传图片
-2. 立即保存用户消息到数据库（ai_message为空），返回message_id
-3. 如果上传图片，先进行图像理解
-4. 从向量数据库中检索相关文化资源
-5. 从检索结果中提取资源ID列表，保存到retrieval_id字段
-6. 将检索结果作为上下文，调用AI模型生成回答
-7. 使用message_id更新现有消息（UPDATE操作），添加AI回答和检索资源ID
+用户输入问题或上传图片
+如果上传图片，先进行图像理解
+从向量数据库中检索相关文化资源
+将检索结果作为上下文，调用AI模型生成回答
+保存对话记录到数据库
 
 延迟加载优化：
-- RAG系统和ImageAIGC系统采用延迟加载
-- 只在用户首次使用时才初始化
-- 显著减少系统启动时间（从19194ms降至数秒）
+RAG系统和ImageAIGC系统采用延迟加载
+只在用户首次使用时才初始化
+显著减少系统启动时间（从19194ms降至数秒）
 
 图像生成
 
 工作流程：
-1. 用户输入提示词或上传参考图片
-2. 立即保存用户消息到数据库（ai_message为空），返回message_id
-3. 如果上传图片，先进行图像理解（使用RAG系统）
-4. 如果没有提示词，使用RAG系统自动生成故事
-5. 调用图像生成API（Huoshan模型）
-6. 使用message_id更新现有消息（UPDATE操作），添加AI回答和生成的图片URL
-7. 保存生成的图片到本地（AIGC_graph文件夹）和数据库
+用户输入提示词或上传参考图片
+如果没有提示词，自动生成故事
+调用图像生成API（Huoshan模型）
+保存生成的图片到本地和数据库
 
-用户上传图片处理：
-- 用户上传的AIGC图片统一存入AIGC_graph_from_users文件夹
-- 文件命名格式：用户账号-上传时间.扩展名
-- 存储逻辑与uploads文件夹一致
-- 如果没有上传图片，使用AIGC_graph/default.jpg作为默认图片
-
-4. 资源上传系统
+资源上传系统
 
 文本资源上传：
-- 支持两种方式：直接输入文本内容或上传文件
-- 文件格式限制：仅支持Word文档（.doc, .docx）或PDF（.pdf）
-- 自动解析文件内容：使用python-docx解析Word文档，PyPDF2解析PDF文档
-- 完整文本内容保存在content_feature_data.content_full中，用于AI标注
+支持两种方式：直接输入文本内容或上传文件
+文件格式限制：仅支持Word文档（.doc, .docx）或PDF（.pdf）
+自动解析文件内容：使用python-docx解析Word文档，PyPDF2解析PDF文档
+完整文本内容保存在content_feature_data.content_full中，用于AI标注
 
 图像资源上传：
-- 文件格式限制：仅支持JPG（.jpg）或PNG（.png）
-- 文件存储路径保存在storage_path字段中（相对于项目根目录）
+文件格式限制：仅支持JPG（.jpg）或PNG（.png）
+文件存储路径保存在storage_path字段中（相对于项目根目录）
 
 用户标注：
-- 用户可在上传时进行标注，标注格式与AI标注、人工标注完全一致
-- 标注字段包括：实体名称、实体类型、描述、来源、时期年代、地理坐标、文化区域、风格特征、文化价值、相关图像链接、数字资源链接
-- 如果用户提供了标注，会立即保存为人工标注记录，同时仍会触发AI标注
+用户可在上传时进行标注，标注格式与AI标注、人工标注完全一致
+标注字段包括：实体名称、实体类型、描述、来源、时期年代、地理坐标、文化区域、风格特征、文化价值、相关图像链接、数字资源链接
+如果用户提供了标注，会立即保存为人工标注记录，同时仍会触发AI标注
 
-5. 标注任务系统
+标注任务系统
 
 任务状态流转：
-- 待标注：任务已创建，AI尚未开始
-- AI标注中：AI正在处理资源
-- AI标注完成：AI标注结果已保存
-- 已完成：人工标注完成（包括上传时自标注或任务页上的人工编辑）
+待标注：任务已创建，AI尚未开始
+AI标注中：AI正在处理资源
+AI标注完成：AI标注结果已保存
+已完成：人工标注完成（包括上传时自标注或任务页上的人工编辑）
 
 资源来源支持：
-- cultural_resources：爬虫抓取的资源
-- cultural_resources_from_user：用户上传的资源
-- AIGC_cultural_resources：AIGC生成的资源
+cultural_resources：爬虫抓取的资源
+cultural_resources_from_user：用户上传的资源
+AIGC_cultural_resources：AIGC生成的资源
 
 权限控制：
-- 普通用户：只能看到自己上传的资源对应的标注任务
-- 管理员：可以看到所有标注任务（包括爬虫、用户上传、AIGC生成）
+普通用户：只能看到自己上传的资源对应的标注任务
+管理员：可以看到所有标注任务（包括爬虫、用户上传、AIGC生成）
 
 资源展示：
-- 文本资源：在标注任务中显示文本内容预览（content_preview）
-- 图像资源：在标注任务中显示图片（通过storage_path或content_feature_data获取文件路径）
-- 前端通过/api/uploads/<filename>接口访问上传的文件
+文本资源：在标注任务中显示文本内容预览（content_preview）
+图像资源：在标注任务中显示图片（通过storage_path或content_feature_data获取文件路径）
+前端通过/api/uploads/<filename>接口访问上传的文件
 
 AI标注自动触发：
-- 检测到用户上传资源后，自动创建AI标注任务
-- 对于文本资源，使用完整文本内容（content_full）进行AI标注
-- 对于图像资源，使用图片路径进行视觉理解标注
+检测到用户上传资源后，自动创建AI标注任务
+对于文本资源，使用完整文本内容（content_full）进行AI标注
+对于图像资源，使用图片路径进行视觉理解标注
 
-6. 数据关联系统
+数据关联系统
 
 文字资源与图片的关联：
-- 爬虫先保存文字资源，获取`resource_id`和`entity_id`
-- 保存图片时，将`resource_id`和`entity_id`写入`crawled_images`表
-- 如果只有图片没有文字，图片的`resource_id`和`entity_id`为NULL
+爬虫先保存文字资源，获取resource_id和entity_id
+保存图片时，将resource_id和entity_id写入crawled_images表
+如果只有图片没有文字，图片的resource_id和entity_id为NULL
 
 用户上传、AIGC生成与爬虫抓取的统一逻辑：
-- 所有资源类型（爬虫、用户上传、AIGC生成）都通过resource_id关联到cultural_resources表
-- 图像资源统一存储在crawled_images表中，通过resource_id关联
-- 标注任务通过resource_source字段区分资源来源，支持三种来源的统一管理
+所有资源类型（爬虫、用户上传、AIGC生成）都通过resource_id关联到cultural_resources表
+图像资源统一存储在crawled_images表中，通过resource_id关联
+标注任务通过resource_source字段区分资源来源，支持三种来源的统一管理
 
 查询优化：
-- 通过`festival_name`字段快速查询某个节日的所有图片
-- 通过`resource_id`查询某个文字资源的所有图片
-- 通过`entity_id`查询某个文化实体的所有图片
+通过festival_name字段快速查询某个节日的所有图片
+通过resource_id查询某个文字资源的所有图片
+通过entity_id查询某个文化实体的所有图片
 
-5. 前端设置页面系统
+前端设置页面系统
 
 设置页面采用列表式布局（类似QQ设置），包含以下功能：
 
 账号显示：
-- 仅显示，不可修改
-- 显示用户的8-10位数字账号
+仅显示，不可修改
+显示用户的8-10位数字账号
 
 昵称管理：
-- 可点击进入修改界面
-- 下方显示当前昵称
-- 支持最多100个字符
-- API: POST /api/auth/update-nickname
+可点击进入修改界面
+下方显示当前昵称
+支持最多100个字符
+API: POST /api/auth/update-nickname
 
 个人签名管理：
-- 可点击进入设置界面
-- 下方显示当前签名（未设置时显示"未设置"）
-- 支持最多500个字符
-- 使用textarea输入框，支持多行文本
-- 显示字符计数（已输入/500）
-- API: POST /api/auth/update-signature
+可点击进入设置界面
+下方显示当前签名（未设置时显示"未设置"）
+支持最多500个字符
+使用textarea输入框，支持多行文本
+显示字符计数（已输入/500）
+API: POST /api/auth/update-signature
 
 密码管理：
-- 可点击进入修改界面
-- 支持两种验证方式：
-  - 原密码验证
-  - 二级密码验证（如果已设置安全问题）
-- API: POST /api/auth/change-password
+可点击进入修改界面
+支持两种验证方式：
+原密码验证
+二级密码验证（如果已设置安全问题）
+API: POST /api/auth/change-password
 
 二级问题管理：
-- 可点击进入设置界面
-- 如果已设置，需要先验证原答案
-- 支持设置新问题和新答案
-- API: POST /api/auth/change-security-question
+可点击进入设置界面
+如果已设置，需要先验证原答案
+支持设置新问题和新答案
+API: POST /api/auth/change-security-question
 
 头像管理：
-- 方式一：通过设置列表进入
-- 方式二：直接点击页面右上角的用户头像
-- 支持上传新头像（自动裁剪到200x200像素）
-- 支持使用默认头像
-- API: POST /api/auth/change-avatar
+方式一：通过设置列表进入
+方式二：直接点击页面右上角的用户头像
+支持上传新头像（自动裁剪到200x200像素）
+支持使用默认头像
+API: POST /api/auth/change-avatar
 
 账号注销：
-- 位于设置列表最底部
-- 红色文字，表示危险操作
-- 需要输入密码确认
-- 注销后账号永久删除，无法恢复
-- API: POST /api/auth/delete-account
+位于设置列表最底部
+红色文字，表示危险操作
+需要输入密码确认
+注销后账号永久删除，无法恢复
+API: POST /api/auth/delete-account
 
 技术实现：
-- 使用Vue 3 Composition API
-- 使用ref管理状态（settingsTab, fromAvatarClick等）
-- 条件渲染显示不同的设置面板
-- 使用sessionStorage保存用户信息（关闭浏览器后需要重新登录）
-- 所有API调用都包含X-User-Id请求头
-
-================================================================================
+使用Vue 3 Composition API
+使用ref管理状态（settingsTab, fromAvatarClick等）
+条件渲染显示不同的设置面板
+使用sessionStorage保存用户信息（关闭浏览器后需要重新登录）
+所有API调用都包含X-User-Id请求头
 
 API接口文档
 
@@ -609,83 +454,40 @@ POST /api/auth/register
 用户注册（自动生成账号）
 
 请求体：
-{
-  "password": "用户密码",
-  "nickname": "用户昵称（可选）",
-  "security_question": "安全问题（可选）",
-  "security_answer": "安全问题答案（可选）"
-}
+
 
 响应：
-{
-  "success": true,
-  "message": "注册成功！您的账号：12345678，请妥善保管，可直接登录。",
-  "user_info": {
-    "id": 1,
-    "account": "12345678",
-    "nickname": "用户昵称",
-    "role": "普通用户"
-  }
-}
+
 
 POST /api/auth/login
 用户登录
 
 请求体：
-{
-  "account": "12345678",
-  "password": "用户密码"
-}
+
 
 POST /api/auth/update-nickname
 修改用户昵称
 
 请求头：
-- `X-User-Id`: 用户ID
+X-User-Id: 用户ID
 
 请求体：
-{
-  "nickname": "新昵称"
-}
+
 
 响应：
-{
-  "success": true,
-  "message": "昵称修改成功",
-  "user_info": {
-    "id": 1,
-    "account": "123456789",
-    "nickname": "新昵称",
-    "signature": "个人签名",
-    "avatar_path": "/default.jpg",
-    "role": "普通用户"
-  }
-}
+
 
 POST /api/auth/update-signature
 修改个人签名
 
 请求头：
-- `X-User-Id`: 用户ID
+X-User-Id: 用户ID
 
 请求体：
-{
-  "signature": "个人签名内容（最多500字符）"
-}
+
 
 响应：
-{
-  "success": true,
-  "message": "个人签名修改成功",
-  "user_info": {
-    "id": 1,
-    "account": "123456789",
-    "nickname": "用户昵称",
-    "signature": "个人签名内容",
-    "avatar_path": "/default.jpg",
-    "role": "普通用户"
-  }
-}
+
 
 资源相关
 
@@ -693,45 +495,20 @@ GET /api/home/resources
 获取首页资源列表
 
 查询参数：
-- `page`: 页码（默认1）
-- `page_size`: 每页数量（默认12）
+page: 页码（默认1）
+page_size: 每页数量（默认12）
 
 响应：
-{
-  "success": true,
-  "resources": [
-    {
-      "id": 1,
-      "festival_name": "中元节",
-      "description": "资源描述...",
-      "image_url": "/api/images/crawled/8.jpg"
-    }
-  ],
-  "total": 100,
-  "page": 1,
-  "page_size": 12
-}
+
 
 GET /api/resource/detail
 获取资源详情
 
 查询参数：
-- `festival_name`: 节日名称（必需）
+festival_name: 节日名称（必需）
 
 响应：
-{
-  "success": true,
-  "resource": {
-    "festival_name": "中元节",
-    "description": "详细描述...",
-    "images": [
-      {
-        "url": "/api/images/crawled/8-1.jpg",
-        "index": 1
-      }
-    ]
-  }
-}
+
 
 AIGC相关
 
@@ -739,15 +516,15 @@ POST /api/aigc/chat
 AIGC聊天接口
 
 请求头：
-- `X-User-Id`: 用户ID
+X-User-Id: 用户ID
 
 请求体（multipart/form-data）：
-- `mode`: 'text' 或 'image'
-- `query`: 用户输入（可选）
-- `images`: 图片文件（可选）
-- `session_id`: 会话ID（可选）
+mode: 'text' 或 'image'
+query: 用户输入（可选）
+images: 图片文件（可选）
+session_id: 会话ID（可选）
 
-响应：Server-Sent Events (SSE) 流式输出
+响应： Server-Sent Events (SSE) 流式输出
 
 管理员相关
 
@@ -755,363 +532,301 @@ GET /api/admin/dashboard/statistics
 获取数据大屏统计信息
 
 请求头：
-- `X-User-Id`: 用户ID（必须是管理员）
+X-User-Id: 用户ID（必须是管理员）
 
 响应：
-{
-  "success": true,
-  "data": {
-    "total_users": 100,
-    "today_users": 10,
-    "total_text_users": 50,
-    "today_text_users": 5,
-    "total_image_users": 30,
-    "today_image_users": 3,
-    "total_text_count": 200,
-    "today_text_count": 15,
-    "total_image_count": 100,
-    "today_image_count": 8,
-    "trend_data": [
-      {
-        "date": "2024-01-15",
-        "daily_users": 10,
-        "text_count": 5,
-        "image_count": 3
-      }
-    ]
-  }
-}
+
 
 POST /api/admin/log-access
 记录用户访问日志
 
 请求体：
-{
-  "user_id": 1,
-  "access_type": "page_view",
-  "access_detail": {
-    "page": "/dashboard"
-  }
-}
 
-================================================================================
 
 代码规范与最佳实践
 
 Java代码规范
 
-1. 命名规范：
-   - 类名：大驼峰（`AuthController`）
-   - 方法名：小驼峰（`getUserById`）
-   - 变量名：小驼峰（`userId`）
-   - 常量：全大写下划线（`MAX_RETRY_COUNT`）
-   - 包名：小写，点分隔（`com.cultural.service`）
+命名规范：
+类名：大驼峰（AuthController）
+方法名：小驼峰（getUserById）
+变量名：小驼峰（userId）
+常量：全大写下划线（MAX_RETRY_COUNT）
+包名：小写，点分隔（com.cultural.service）
 
-2. 架构规范：
-   - Controller层：处理HTTP请求，参数验证
-   - Service层：业务逻辑处理
-   - DAO层：数据访问，使用JdbcTemplate
-   - Entity层：实体类，对应数据库表
+架构规范：
+Controller层：处理HTTP请求，参数验证
+Service层：业务逻辑处理
+DAO层：数据访问，使用JdbcTemplate
+Entity层：实体类，对应数据库表
 
-3. 错误处理：
-   - 使用try-catch捕获异常
-   - 记录详细的错误日志
-   - 返回用户友好的错误消息
-   - 使用ResponseEntity包装响应
+错误处理：
+使用try-catch捕获异常
+记录详细的错误日志
+返回用户友好的错误消息
+使用ResponseEntity包装响应
 
-4. 数据库操作：
-   - 使用JdbcTemplate进行数据库操作
-   - 使用@Transactional管理事务
-   - 使用预编译语句防止SQL注入
+数据库操作：
+使用JdbcTemplate进行数据库操作
+使用@Transactional管理事务
+使用预编译语句防止SQL注入
 
-5. 代码复用：
-   - 避免重复代码
-   - 提取公共方法
-   - 使用配置类管理配置
+代码复用：
+避免重复代码
+提取公共方法
+使用配置类管理配置
 
 Python代码规范（爬虫和AIGC模块）
 
-1. 命名规范：
-   - 类名：大驼峰（`AuthSystem`）
-   - 函数名：小写下划线（`get_user_by_id`）
-   - 私有方法：单下划线前缀（`_hash_password`）
-   - 常量：全大写下划线（`MAX_RETRY_COUNT`）
+命名规范：
+类名：大驼峰（AuthSystem）
+函数名：小写下划线（get_user_by_id）
+私有方法：单下划线前缀（_hash_password）
+常量：全大写下划线（MAX_RETRY_COUNT）
 
-2. 错误处理：
-   - 使用try-except捕获异常
-   - 记录详细的错误日志
-   - 返回用户友好的错误消息
+错误处理：
+使用try-except捕获异常
+记录详细的错误日志
+返回用户友好的错误消息
 
-3. 数据库操作：
-   - 使用上下文管理器（`with conn.cursor()`）
-   - 及时提交或回滚事务
-   - 关闭数据库连接
+数据库操作：
+使用上下文管理器（with conn.cursor()）
+及时提交或回滚事务
+关闭数据库连接
+统一使用DictCursor确保返回字典格式
 
-4. 代码复用：
-   - 避免重复代码
-   - 提取公共函数
-   - 使用配置常量而非硬编码
+代码复用：
+避免重复代码
+提取公共函数
+使用配置常量而非硬编码
 
 Vue.js代码规范
 
-1. 组件结构：
-   - 使用Composition API
-   - `<script setup>` 语法
-   - 单一职责原则
+组件结构：
+使用Composition API
+<script setup> 语法
+单一职责原则
 
-2. 状态管理：
-   - 使用`ref`和`reactive`管理状态
-   - 避免过度使用全局状态
-   - 合理使用`computed`和`watch`
+状态管理：
+使用ref和reactive管理状态
+避免过度使用全局状态
+合理使用computed和watch
 
-3. API调用：
-   - 统一错误处理
-   - 显示加载状态
-   - 用户友好的错误提示
+API调用：
+统一错误处理
+显示加载状态
+用户友好的错误提示
 
 已修复的代码质量问题
 
-1. 硬编码问题：
-   - ✅ 移除硬编码的数据库密码
-   - ✅ 使用环境变量配置
-   - ✅ 提取魔法数字为常量
+硬编码问题：
+✅ 移除硬编码的数据库密码
+✅ 使用环境变量配置
+✅ 提取魔法数字为常量
 
-2. 重复代码：
-   - ✅ 统一数据库连接管理（`db_connection.py`）
-   - ✅ 统一日志记录（`user_logging.py`）
-   - ✅ 统一错误处理模式
+重复代码：
+✅ 统一数据库连接管理（db_connection.py）
+✅ 统一日志记录（user_logging.py）
+✅ 统一错误处理模式
 
-3. 命名不一致：
-   - ✅ 统一使用`account`作为用户账号字段名
-   - ✅ 统一字段命名规范
+命名不一致：
+✅ 统一使用account作为用户账号字段名
+✅ 统一字段命名规范
 
-4. 性能优化：
-   - ✅ 延迟加载AI模型（减少启动时间）
-   - ✅ 数据库索引优化
-   - ✅ 图片懒加载
+性能优化：
+✅ 延迟加载AI模型（减少启动时间）
+✅ 数据库索引优化
+✅ 图片懒加载
 
-================================================================================
+编码兼容性：
+✅ 修复Windows GBK编码不支持的Unicode字符
+✅ 统一使用ASCII兼容的字符（如[OK]、[WARN]）
+
+数据库查询格式：
+✅ 统一使用DictCursor确保返回字典格式
+✅ 修复statistics_api.py中的datetime变量冲突
+✅ 修复/api/aigc/sessions端点的JSON解析错误
 
 部署与运维
 
 环境要求
-
-- Java: 最新LTS版本（推荐Java 17或21）
-- Maven 3.6 或更高版本
-- MySQL 8.0 或更高版本（推荐使用最新版本）
-- Node.js 16+（前端）
-- Python 3.7+（可选，用于爬虫和AIGC功能）
-- 至少2GB内存
+Java: 最新LTS版本（推荐Java 17或21）
+Maven 3.6 或更高版本
+MySQL 8.0 或更高版本（推荐使用最新版本）
+Node.js 16+（前端）
+Python 3.7+（可选，用于爬虫和AIGC功能）
+至少2GB内存
 
 部署步骤
 
-1. 安装Java和Maven：
-   - 下载并安装最新LTS版本的JDK（推荐Java 17或21）
-   - 下载并安装Maven 3.6+
-   - 配置JAVA_HOME和MAVEN_HOME环境变量
+安装Java和Maven：
+下载并安装最新LTS版本的JDK（推荐Java 17或21）
+下载并安装Maven 3.6+
+配置JAVA_HOME和MAVEN_HOME环境变量
 
-2. 安装其他依赖：
-   python install_dependencies.py
+安装其他依赖：
+   
    （这会安装Python和Node.js依赖）
 
-3. 初始化数据库：
-   python database_files/run_init_schema.py
-
-4. 配置环境变量：
-   创建`.env`文件，配置数据库和API密钥
+初始化数据库：
    
-   数据库配置在 `backend/src/main/resources/application.yml` 中：
-   ```yaml
-   spring:
-     datasource:
-       url: jdbc:mysql://127.0.0.1:3306/java_project?...
-       username: root
-       password: your_password
-   ```
 
-5. 启动Java后端：
-   cd backend
-   mvn spring-boot:run
+配置环境变量：
+   创建.env文件，配置数据库和API密钥
+   
+   数据库配置在 backend/src/main/resources/application.yml 中：
+   
+
+启动Java后端：
+   
    
    或使用启动脚本：
-   # Windows
-   cd backend
-   start_backend.bat
    
-   # Linux/Mac
-   cd backend
-   chmod +x start_backend.sh
-   ./start_backend.sh
 
-6. 启动前端：
-   cd FrontEnd
-   npm run dev
+启动前端：
+   
 
-7. （可选）启动Python AIGC服务（如果需要AI功能）：
-   python AIGC/aigc_api_server.py
+（可选）启动Python AIGC服务（如果需要AI功能）：
+   
+   服务将在端口7200启动
 
 监控与日志
-
-- 访问日志：存储在`user_access_logs`表
-- 错误日志：
-  - Java后端：控制台输出，可通过logback配置日志文件
-  - Python服务：控制台输出
-- 数据统计：管理员数据大屏
-- 日志级别配置：在`application.yml`中配置
+访问日志： 存储在user_access_logs表
+错误日志：
+Java后端：控制台输出，可通过logback配置日志文件
+Python服务：控制台输出
+数据统计： 管理员数据大屏
+日志级别配置： 在application.yml中配置
 
 备份策略
 
-1. 数据库备份：
-   - 定期备份MySQL数据库
-   - 建议每日备份
+数据库备份：
+定期备份MySQL数据库
+建议每日备份
 
-2. 文件备份：
-   - `crawled_images/`：爬虫图片
-   - `AIGC_graph/`：AIGC生成图片
-   - `FrontEnd/public/`：用户头像
+文件备份：
+crawled_images/：爬虫图片
+AIGC_graph/：AIGC生成图片
+FrontEnd/public/：用户头像
 
 性能优化建议
 
-1. 数据库优化：
-   - 定期清理历史日志数据
-   - 优化慢查询
-   - 使用连接池
+数据库优化：
+定期清理历史日志数据
+优化慢查询
+使用连接池
 
-2. 缓存策略：
-   - 考虑使用Redis缓存热点数据
-   - 静态资源使用CDN
+缓存策略：
+考虑使用Redis缓存热点数据
+静态资源使用CDN
 
-3. 图片优化：
-   - 压缩大图片
-   - 使用WebP格式
-   - 实现图片懒加载
-
-================================================================================
+图片优化：
+压缩大图片
+使用WebP格式
+实现图片懒加载
 
 常见问题排查
 
-1. 数据库连接失败
+数据库连接失败
 
 检查项：
-- MySQL服务是否运行（MySQL 8.0+）
-- `backend/src/main/resources/application.yml`中的数据库配置是否正确
-- 数据库用户权限
-- JDBC驱动是否正确加载
-- 检查MySQL版本是否为8.0或更高版本
+MySQL服务是否运行（MySQL 8.0+）
+backend/src/main/resources/application.yml中的数据库配置是否正确
+数据库用户权限
+JDBC驱动是否正确加载
+检查MySQL版本是否为8.0或更高版本
 
-2. API请求失败或页面加载缓慢
-
-检查项：
-- Java后端服务是否运行（端口8000）
-  - 检查：`cd backend && mvn spring-boot:run`
-  - 查看控制台是否有启动错误
-  - 确认后端服务正常启动后再访问前端
-- Python AIGC服务是否运行（端口7200，如果使用AIGC功能）
-  - 检查：`python AIGC/aigc_api_server.py`
-  - 查看控制台是否有启动错误（注意Unicode编码错误）
-  - 确认服务正常启动后再使用AIGC功能
-- 前端代理配置是否正确（`FrontEnd/vite.config.js`）
-  - 确认代理目标端口为7200（Python后端）或8000（Java后端）
-- 前端请求超时设置（默认10秒）
-- 查看浏览器控制台是否有错误信息
-- 查看后端日志
-- 如果后端服务未运行，前端会在10秒后显示超时错误
-
-3. 图片无法显示
+API请求失败或页面加载缓慢
 
 检查项：
-- 图片文件是否存在
-- 文件路径是否正确
-- WebConfig中的静态资源路径配置是否正确
-- 文件权限设置
+Java后端服务是否运行（端口8000）
+检查：cd backend && mvn spring-boot:run
+查看控制台是否有启动错误
+确认后端服务正常启动后再访问前端
+Python AIGC服务是否运行（端口7200，如果使用AIGC功能）
+检查：python AIGC/aigc_api_server.py
+查看控制台是否有启动错误（注意Unicode编码错误）
+确认服务正常启动后再使用AIGC功能
+前端代理配置是否正确（FrontEnd/vite.config.js）
+确认代理目标端口为7200（Python后端）或8000（Java后端）
+前端请求超时设置（默认10秒）
+查看浏览器控制台是否有错误信息
+查看后端日志
+如果后端服务未运行，前端会在10秒后显示超时错误
 
-4. AIGC功能异常
-
-检查项：
-- Python AIGC服务是否运行（如果使用AI功能，端口7200）
-- AI模型API密钥配置
-- 网络连接是否正常
-- 查看错误日志
-- 如果看到"cannot access local variable 'rag_system'"，说明变量作用域问题，已修复（在函数开始处初始化rag_system变量）
-- 如果看到"JSON.parse: unexpected end of data"，可能是数据库查询返回格式问题，已修复（统一使用DictCursor）
-- 如果看到重复的用户消息，说明消息保存逻辑问题，已修复为UPDATE机制
-- 检查AIGC_graph_from_users文件夹是否存在（用户上传图片存储位置）
-- 检查retrieval_id字段是否正确保存（从RAG检索结果中提取资源ID）
-
-5. Maven依赖下载失败
+图片无法显示
 
 检查项：
-- Maven配置是否正确
-- 网络连接是否正常
-- 可以配置Maven镜像加速下载
-- 确认Java版本是否为最新LTS版本（推荐Java 17或21）
+图片文件是否存在
+文件路径是否正确
+WebConfig中的静态资源路径配置是否正确
+文件权限设置
 
-6. 页面无法打开或一直加载
+AIGC功能异常
 
 检查项：
-- 确认Java后端服务已启动（端口8000）
-  - 运行 `cd backend && mvn spring-boot:run`
-  - 检查控制台是否有启动成功信息
-- 确认Python AIGC服务已启动（端口7200，如果使用AIGC功能）
-  - 运行 `python AIGC/aigc_api_server.py`
-  - 检查控制台是否有启动成功信息
-  - 注意：如果看到UnicodeEncodeError，说明代码中使用了Windows GBK编码不支持的字符，已修复
-- 检查浏览器控制台错误信息（F12）
-  - 如果看到 "Content process isn't responsive"，可能是浏览器资源问题
-  - 如果看到 "请求超时"，说明后端服务未运行
-  - 如果看到 "ECONNREFUSED"，说明后端服务未启动或端口配置错误
-- 清除浏览器缓存（Ctrl+Shift+Delete）
-- 检查前端服务是否正常运行（端口5173）
-- 确认网络连接正常
-- 如果后端服务未运行，页面会在10秒后显示超时错误提示
-- 检查端口占用情况：
-  - Java后端：`netstat -ano | findstr :8000`
-  - Python后端：`netstat -ano | findstr :7200`
-- 尝试使用隐私/无痕模式打开页面
-- 详细排查步骤请参考 `FrontEnd/TROUBLESHOOTING.md`
+Python AIGC服务是否运行（如果使用AI功能）
+AI模型API密钥配置
+网络连接是否正常
+查看错误日志
 
-================================================================================
+Maven依赖下载失败
+
+检查项：
+Maven配置是否正确
+网络连接是否正常
+可以配置Maven镜像加速下载
+确认Java版本是否为最新LTS版本（推荐Java 17或21）
+
+页面无法打开或一直加载
+
+检查项：
+确认Java后端服务已启动（端口8000）
+运行 cd backend && mvn spring-boot:run
+检查控制台是否有启动成功信息
+确认Python AIGC服务已启动（端口7200，如果使用AIGC功能）
+运行 python AIGC/aigc_api_server.py
+检查控制台是否有启动成功信息
+注意：如果看到UnicodeEncodeError，说明代码中使用了Windows GBK编码不支持的字符，已修复
+检查浏览器控制台错误信息（F12）
+如果看到 "Content process isn't responsive"，可能是浏览器资源问题
+如果看到 "请求超时"，说明后端服务未运行
+如果看到 "ECONNREFUSED"，说明后端服务未启动或端口配置错误
+清除浏览器缓存（Ctrl+Shift+Delete）
+检查前端服务是否正常运行（端口5173）
+确认网络连接正常
+如果后端服务未运行，页面会在10秒后显示超时错误提示
+检查端口占用情况：
+Java后端：netstat -ano | findstr :8000
+Python后端：netstat -ano | findstr :7200
+尝试使用隐私/无痕模式打开页面
+详细排查步骤请参考 FrontEnd/TROUBLESHOOTING.md
 
 版本历史
 
-v2.5.0 (当前版本) - 2025年12月23日
+v2.4.0 (当前版本) - 2025年12月23日
 
 主要更新：
-- 修复AIGC即时显示用户消息：用户发送消息后立即保存到数据库并显示，使用UPDATE机制避免重复插入
-- 修复重复用户消息问题：改为使用message_id更新现有消息，而不是重复插入
-- 修复retrieval_id字段保存：从RAG检索结果中提取资源ID并正确保存到qa_messages表的retrieval_id字段
-- 修复image_url处理：文字AIGC如果没有用户上传图片，使用AIGC_graph/default.jpg作为默认图片
-- 修复用户上传图片存储：用户上传的AIGC图片统一存入AIGC_graph_from_users文件夹，逻辑与uploads一致
-- 修复rag_system变量作用域问题：在函数开始处初始化rag_system变量，避免UnboundLocalError
-- 添加AIGC_graph_from_users路由支持：新增/api/AIGC_graph_from_users/<filename>路由提供用户上传图片访问
-- 优化消息保存机制：支持通过message_id更新现有消息，避免重复保存
-- 数据库结构更新：qa_messages表添加retrieval_id字段（TEXT类型），用于存储检索到的资源ID列表
-
-v2.4.0 - 2025年12月23日
-
-主要更新：
-- 修复Unicode编码错误（Windows GBK编码兼容性）
-- 修复数据库查询结果格式问题（统一使用DictCursor）
-- Python后端端口更新为7200
-- 优化错误处理和诊断信息
-- 修复statistics_api.py中的datetime变量冲突问题
-- 修复/api/aigc/sessions端点的JSON解析错误
+修复Unicode编码错误（Windows GBK编码兼容性）
+修复数据库查询结果格式问题（统一使用DictCursor）
+Python后端端口更新为7200
+优化错误处理和诊断信息
+修复statistics_api.py中的datetime变量冲突问题
+修复/api/aigc/sessions端点的JSON解析错误
 
 v2.3.0 - 2025年12月22日
 
 主要特性：
-- 用户注册/登录（自动生成账号）
-- 文化资源爬取与清洗
-- AIGC文字/图片生成（Python服务）
-- 数据大屏统计
-- 评论与通知系统
+用户注册/登录（自动生成账号）
+文化资源爬取与清洗
+AIGC文字/图片生成（Python服务）
+数据大屏统计
+评论与通知系统
 
 技术栈：
-- Java后端：Spring Boot 3.2.0 + JDBC + MySQL 8.0+
-- Python服务：Flask（AIGC功能，端口7200）
-- 前端：Vue.js 3 + Vite
-
-================================================================================
+Java后端：Spring Boot 3.2.0 + JDBC + MySQL 8.0+
+Python服务：Flask（AIGC功能，端口7200）
+前端：Vue.js 3 + Vite
 
 许可证
 

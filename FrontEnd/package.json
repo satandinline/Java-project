@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "dev:full": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:full": "concurrently -k -s first --names backend,frontend -c \"cyan,yellow\" \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:backend": "cd .. && python AIGC/aigc_api_server.py",
     "dev:frontend": "vite",
     "build": "vite build",

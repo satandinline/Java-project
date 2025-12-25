@@ -433,7 +433,6 @@ const handleUpload = async () => {
     }
   } catch (error) {
     message.value = `上传失败: ${error.message}`;
-    console.error('上传错误:', error);
   }
 };
 </script>

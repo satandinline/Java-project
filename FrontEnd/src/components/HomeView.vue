@@ -189,14 +189,11 @@ const fetchResources = async (page = null) => {
       
       // 如果资源列表为空，输出提示
       if (resourceList.value.length === 0) {
-        console.warn('资源列表为空，可能是数据库中没有数据');
       }
     } else {
-      console.error('获取资源失败:', data.message || '未知错误');
       resourceList.value = [];
     }
   } catch (error) {
-    console.error('获取资源失败:', error);
     resourceList.value = [];
     
     // 根据错误类型显示不同的提示信息
@@ -330,7 +327,6 @@ onMounted(async () => {
       const userInfo = JSON.parse(userInfoStr);
       isAdmin.value = userInfo && (userInfo.role === '管理员' || userInfo.role === '超级管理员');
     } catch (e) {
-      console.error('解析用户信息失败:', e);
       isAdmin.value = false;
     }
   }
@@ -346,21 +342,16 @@ onMounted(async () => {
     clearTimeout(healthTimeout);
     
     if (!healthResponse.ok) {
-      console.warn('后端健康检查失败，状态码:', healthResponse.status);
     } else {
       const healthData = await healthResponse.json();
-      console.log('后端服务状态:', healthData);
       if (healthData.database_status && healthData.database_status !== 'connected') {
-        console.error('数据库连接状态异常:', healthData.database_status);
       }
     }
   } catch (error) {
     clearTimeout(healthTimeout);
     // 健康检查失败不影响页面加载，只记录日志
     if (error.name === 'AbortError') {
-      console.warn('后端健康检查超时（3秒），继续加载页面...');
     } else {
-      console.warn('无法连接到后端服务，继续加载页面:', error);
     }
     // 不显示alert，让fetchResources来处理错误
   }

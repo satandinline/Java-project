@@ -92,21 +92,8 @@ const loading = ref(false);
 const error = ref('');
 const switching = ref(false);
 
-const getCurrentUser = () => {
-  // 优先使用sessionStorage，如果没有则使用localStorage
-  let userInfoStr = sessionStorage.getItem('userInfo');
-  if (!userInfoStr) {
-    userInfoStr = localStorage.getItem('userInfo');
-  }
-  if (userInfoStr) {
-    try {
-      return JSON.parse(userInfoStr);
-    } catch (e) {
-      console.error('解析用户信息失败:', e);
-    }
-  }
-  return null;
-};
+// 导入统一的getCurrentUser函数
+import { getCurrentUser } from '../utils/api.js';
 
 const loadUsers = async () => {
   loading.value = true;
@@ -140,7 +127,6 @@ const loadUsers = async () => {
       error.value = data.message || '加载用户列表失败';
     }
   } catch (e) {
-    console.error('加载用户列表失败:', e);
     error.value = '加载用户列表失败，请稍后重试';
   } finally {
     loading.value = false;
@@ -200,7 +186,6 @@ const switchRole = async () => {
       alert(data.message || '切换失败');
     }
   } catch (e) {
-    console.error('切换用户身份失败:', e);
     alert('切换失败，请稍后重试');
   } finally {
     switching.value = false;

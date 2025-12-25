@@ -2,6 +2,15 @@
 
 这是一个基于Spring Boot的Java后端服务，使用JDBC连接MySQL数据库。
 
+**⚠️ 重要说明：此Java后端当前未被前端使用。**
+
+- 前端通过vite代理将所有 `/api` 请求转发到 `http://localhost:7200`（Python后端）
+- 实际使用的API服务在Python后端（`AIGC/aigc_api_server.py`）中实现
+- 此Java后端保留用于：
+  - 未来可能的Java后端迁移
+  - 直接访问Java后端的场景（不通过前端代理）
+- Java后端的认证、统计、上传API与Python后端重复，实际使用的是Python后端实现
+
 ## 项目结构
 
 ```

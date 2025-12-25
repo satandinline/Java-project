@@ -47,7 +47,8 @@ MYSQL_CONFIG = {
 }
 
 # SQL文件路径
-SQL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'init_schema.sql')
+# 使用相对路径
+SQL_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'init_schema.sql')
 
 
 def get_statement_priority(stmt):

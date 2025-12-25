@@ -17,12 +17,17 @@ import time
 import sys
 
 # 添加项目根目录到路径，以便导入db_connection
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 使用相对路径添加项目根目录到sys.path
+current_file_dir = os.path.dirname(os.path.realpath(__file__))
+project_root = os.path.dirname(current_file_dir)
+sys.path.insert(0, project_root)
 from db_connection import get_spider_db_connection, get_spider_db_config
 from festival_name_utils import chinese_to_english_festival, extract_and_convert_festival_name
 
 # 爬虫配置
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 使用相对路径获取项目根目录
+current_file_dir = os.path.dirname(os.path.realpath(__file__))
+BASE_DIR = os.path.dirname(current_file_dir)
 CRAWLED_IMAGES_DIR = os.path.join(BASE_DIR, "crawled_images")
 ALLOWED_DOMAINS = ["www.minwang.com.cn", "minwang.com.cn", "w.minwang.com.cn", 
                    "www.mzzyk.com", "mzzyk.com", "m.mzzyk.com"]

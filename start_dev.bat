@@ -2,6 +2,8 @@
 chcp 65001 >nul 2>&1
 setlocal enabledelayedexpansion
 set "SCRIPT_DIR=%~dp0"
+REM 设置Python输出编码为UTF-8
+set PYTHONIOENCODING=utf-8
 
 echo ============================================================
 echo Cultural Resource System - Dev start script
@@ -11,7 +13,7 @@ echo.
 REM Check Python
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo [����] δ��⵽Python�����Ȱ�װPython
+    echo [ERROR] Python not found, please install Python
     pause
     exit /b 1
 )
@@ -19,7 +21,7 @@ if errorlevel 1 (
 REM Check Node.js
 node --version >nul 2>&1
 if errorlevel 1 (
-    echo [����] δ��⵽Node.js�����Ȱ�װNode.js
+    echo [ERROR] Node.js not found, please install Node.js
     pause
     exit /b 1
 )
@@ -38,7 +40,7 @@ echo.
 REM Enter frontend directory
 cd /d "%SCRIPT_DIR%FrontEnd"
 if errorlevel 1 (
-    echo [����] �޷�����FrontEndĿ¼
+    echo [ERROR] Cannot enter FrontEnd directory
     pause
     exit /b 1
 )
