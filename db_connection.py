@@ -14,27 +14,58 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-# ==================== 默认数据库配置 ====================
-# 默认MySQL root密码（如果环境变量中没有设置，使用此默认值）
-DEFAULT_MYSQL_PASSWORD = "M17382930994c@"
+# ==================== 数据库配置（从环境变量获取） ====================
+# 所有数据库配置都从.env文件读取，不提供硬编码的默认值
+MYSQL_HOST = os.getenv("MYSQL_HOST")
+MYSQL_PORT = os.getenv("MYSQL_PORT")
+MYSQL_USER = os.getenv("MYSQL_USER")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD")
+MYSQL_DB = os.getenv("MYSQL_DB")
 
-# ==================== 爬虫专用数据库配置（使用root账户） ====================
-SPIDER_DB_CONFIG = {
-    "host": "127.0.0.1",
-    "port": 3306,
-    "user": "root",
-    "password": DEFAULT_MYSQL_PASSWORD,
-    "database": "java_project",
-    "charset": "utf8mb4"
-}
+# 验证必需的配置项
+def validate_db_config():
+    """验证数据库配置是否完整"""
+    missing = []
+    if not MYSQL_HOST:
+        missing.append("MYSQL_HOST")
+    if not MYSQL_PORT:
+        missing.append("MYSQL_PORT")
+    if not MYSQL_USER:
+        missing.append("MYSQL_USER")
+    if not MYSQL_PASSWORD:
+        missing.append("MYSQL_PASSWORD")
+    if not MYSQL_DB:
+        missing.append("MYSQL_DB")
+    
+    if missing:
+        raise ValueError(
+            f"缺少必需的数据库配置环境变量: {', '.join(missing)}\n"
+            f"请在.env文件中配置以下变量:\n"
+            f"MYSQL_HOST=127.0.0.1\n"
+            f"MYSQL_PORT=3306\n"
+            f"MYSQL_USER=root\n"
+            f"MYSQL_PASSWORD=your_password\n"
+            f"MYSQL_DB=java_project"
+        )
+    return True
 
-# ==================== 用户数据库配置（从环境变量获取，如果没有则使用默认配置） ====================
-MYSQL_HOST = os.getenv("MYSQL_HOST", "127.0.0.1")
-MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
-MYSQL_USER = os.getenv("MYSQL_USER", "root")
-# 如果环境变量中没有密码，使用默认密码
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", DEFAULT_MYSQL_PASSWORD)
-MYSQL_DB = os.getenv("MYSQL_DB", "java_project")
+# 获取爬虫专用数据库配置（使用root账户，从环境变量读取）
+def get_spider_db_config():
+    """
+    获取爬虫专用的数据库配置字典（从环境变量读取）
+    
+    Returns:
+        dict: 数据库配置字典
+    """
+    validate_db_config()
+    return {
+        "host": MYSQL_HOST,
+        "port": int(MYSQL_PORT),
+        "user": MYSQL_USER,
+        "password": MYSQL_PASSWORD,
+        "database": MYSQL_DB.replace("-", "_") if "-" in MYSQL_DB else MYSQL_DB,
+        "charset": "utf8mb4"
+    }
 
 
 def get_spider_db_connection():
@@ -46,29 +77,23 @@ def get_spider_db_connection():
         pymysql.Connection: 数据库连接对象，失败返回None
     """
     try:
+        config = get_spider_db_config()
         conn = pymysql.connect(
-            host=SPIDER_DB_CONFIG["host"],
-            port=SPIDER_DB_CONFIG["port"],
-            user=SPIDER_DB_CONFIG["user"],
-            password=SPIDER_DB_CONFIG["password"],
-            database=SPIDER_DB_CONFIG["database"],
-            charset=SPIDER_DB_CONFIG["charset"],
+            host=config["host"],
+            port=config["port"],
+            user=config["user"],
+            password=config["password"],
+            database=config["database"],
+            charset=config["charset"],
             cursorclass=DictCursor
         )
         return conn
+    except ValueError as e:
+        print(f"数据库配置错误: {e}")
+        return None
     except Exception as e:
         print(f"爬虫数据库连接失败: {e}")
         return None
-
-
-def get_spider_db_config():
-    """
-    获取爬虫专用的数据库配置字典
-    
-    Returns:
-        dict: 数据库配置字典
-    """
-    return SPIDER_DB_CONFIG.copy()
 
 
 def get_user_db_config(user_id: Optional[int] = None):
@@ -91,12 +116,13 @@ def get_user_db_config(user_id: Optional[int] = None):
             if user_config:
                 return user_config
         except Exception as e:
-            print(f"从login.py获取用户数据库配置失败: {e}，使用默认配置")
+            print(f"从login.py获取用户数据库配置失败: {e}，使用环境变量配置")
     
     # 使用环境变量配置
+    validate_db_config()
     return {
         "host": MYSQL_HOST,
-        "port": MYSQL_PORT,
+        "port": int(MYSQL_PORT),
         "user": MYSQL_USER,
         "password": MYSQL_PASSWORD,
         "database": MYSQL_DB.replace("-", "_") if "-" in MYSQL_DB else MYSQL_DB,
@@ -147,23 +173,20 @@ def get_user_db_connection(user_id: Optional[int] = None):
 def get_default_db_config():
     """
     获取默认数据库配置（用于向后兼容）
-    优先使用环境变量，如果没有则使用爬虫配置
+    从环境变量读取配置
     
     Returns:
         dict: 数据库配置字典
     """
-    if MYSQL_PASSWORD:
-        return {
-            "host": MYSQL_HOST,
-            "port": MYSQL_PORT,
-            "user": MYSQL_USER,
-            "password": MYSQL_PASSWORD,
-            "database": MYSQL_DB.replace("-", "_") if "-" in MYSQL_DB else MYSQL_DB,
-            "charset": "utf8mb4"
-        }
-    else:
-        # 如果没有设置密码，使用爬虫配置
-        return get_spider_db_config()
+    validate_db_config()
+    return {
+        "host": MYSQL_HOST,
+        "port": int(MYSQL_PORT),
+        "user": MYSQL_USER,
+        "password": MYSQL_PASSWORD,
+        "database": MYSQL_DB.replace("-", "_") if "-" in MYSQL_DB else MYSQL_DB,
+        "charset": "utf8mb4"
+    }
 
 
 def get_default_db_connection():

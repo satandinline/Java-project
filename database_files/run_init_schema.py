@@ -37,12 +37,39 @@ if sys.platform == 'win32':
 # 加载环境变量
 load_dotenv(override=True)
 
-# 尝试从环境变量获取配置，如果没有则使用默认值
+# 从环境变量获取配置，不提供硬编码的默认值
+MYSQL_HOST = os.getenv('MYSQL_HOST')
+MYSQL_PORT = os.getenv('MYSQL_PORT')
+MYSQL_USER = os.getenv('MYSQL_USER')
+MYSQL_PASSWORD = os.getenv('MYSQL_PASSWORD')
+MYSQL_DB = os.getenv('MYSQL_DB', 'java_project')  # 数据库名可以使用默认值
+
+# 验证必需的配置项
+if not all([MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD]):
+    missing = []
+    if not MYSQL_HOST:
+        missing.append('MYSQL_HOST')
+    if not MYSQL_PORT:
+        missing.append('MYSQL_PORT')
+    if not MYSQL_USER:
+        missing.append('MYSQL_USER')
+    if not MYSQL_PASSWORD:
+        missing.append('MYSQL_PASSWORD')
+    raise ValueError(
+        f"缺少必需的数据库配置环境变量: {', '.join(missing)}\n"
+        f"请在.env文件中配置以下变量:\n"
+        f"MYSQL_HOST=127.0.0.1\n"
+        f"MYSQL_PORT=3306\n"
+        f"MYSQL_USER=root\n"
+        f"MYSQL_PASSWORD=your_password\n"
+        f"MYSQL_DB=java_project"
+    )
+
 MYSQL_CONFIG = {
-    'host': os.getenv('MYSQL_HOST', '127.0.0.1'),
-    'port': int(os.getenv('MYSQL_PORT', '3306')),
-    'user': os.getenv('MYSQL_USER', 'root'),
-    'password': os.getenv('MYSQL_PASSWORD', 'M17382930994c@'),
+    'host': MYSQL_HOST,
+    'port': int(MYSQL_PORT),
+    'user': MYSQL_USER,
+    'password': MYSQL_PASSWORD,
     'charset': 'utf8mb4'
 }
 
